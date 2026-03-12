@@ -12,6 +12,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DirectionsBike
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -354,8 +356,8 @@ private fun SectionHeader(title: String, icon: ImageVector) {
 private data class ModeOption(val label: String, val icon: ImageVector)
 
 private val travelModeOptions = listOf(
-    ModeOption("Walk",  Icons.Default.DirectionsWalk),
-    ModeOption("Bike",  Icons.Default.DirectionsBike),
+    ModeOption("Walk", Icons.AutoMirrored.Filled.DirectionsWalk),
+    ModeOption("Bike", Icons.AutoMirrored.Filled.DirectionsBike),
     ModeOption("Car",   Icons.Default.DirectionsCar),
     ModeOption("Bus",   Icons.Default.DirectionsBus),
     ModeOption("Train", Icons.Default.Train),

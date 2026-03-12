@@ -14,6 +14,7 @@ data class Trip(
     val purpose: String = "",
     val companions: Int = 0,
     val cost: Double = 0.0,
-    val status: String = "",   // "Auto-logged" / "Needs Info"
-    val date: String = ""      // Optional: yyyy-MM-dd
+    val status: String = "",
+    val date: String = "",
+    val distanceKm: Double = 0.0   // ← ADD THIS
 )

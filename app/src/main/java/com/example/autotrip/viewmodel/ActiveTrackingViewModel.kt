@@ -84,13 +84,17 @@ class ActiveTrackingViewModel : ViewModel() {
     private fun onLocationReceived(loc: Location) {
         lastLocation?.let { prev ->
             val delta = prev.distanceTo(loc)
-            if (delta > 2f) {
+            if (delta > 0.5f) {
                 totalDistM += delta
                 _distanceKm.value = totalDistM / 1000.0
             }
         }
         lastLocation = loc
-        _speedKmh.value = if (loc.hasSpeed() && loc.speed > 0f) loc.speed * 3.6 else _speedKmh.value
+        // Use speed from location if available, otherwise derive from distance delta
+        _speedKmh.value = when {
+            loc.hasSpeed() && loc.speed > 0f -> loc.speed * 3.6
+            else -> _speedKmh.value
+        }
     }
 
     // ── Stop & save ──────────────────────────────────────────────
@@ -122,7 +126,8 @@ class ActiveTrackingViewModel : ViewModel() {
             companions  = 0,
             cost        = 0.0,
             status      = "Needs Info",
-            date        = dateFmt.format(Date(now))
+            date        = dateFmt.format(Date(now)),
+            distanceKm  = totalDistM / 1000.0
         )
 
         viewModelScope.launch {

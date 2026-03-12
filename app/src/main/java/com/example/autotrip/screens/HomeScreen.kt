@@ -159,8 +159,10 @@ fun SummaryCard(trips: List<Trip> = emptyList()) {
     val tripCount = trips.size
     // Distance: sum of all trips — Trip.cost can't be used; we show count-based placeholder
     // until real distance is stored. For now show "—" if no GPS data yet.
-    val totalDistanceKm = trips.sumOf { 0.0 } // placeholder — replace with trip.distanceKm when field added
-    val distanceLabel = if (tripCount == 0) "—" else "—"   // kept as stub; see note below
+    //val totalDistanceKm = trips.sumOf { 0.0 } // placeholder — replace with trip.distanceKm when field added
+    //val distanceLabel = if (tripCount == 0) "—" else "—"   // kept as stub; see note below
+    val totalDistanceKm = trips.sumOf { it.distanceKm }
+    val distanceLabel = if (tripCount == 0) "—" else "%.1f km".format(totalDistanceKm)
 
     Card(
         modifier  = Modifier.fillMaxWidth().offset(y = offsetY).alpha(cardAlpha),

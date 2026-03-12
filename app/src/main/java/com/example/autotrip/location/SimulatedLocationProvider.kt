@@ -57,6 +57,7 @@ class SimulatedLocationProvider(
                     longitude        = lng
                     speed            = (speedMps / SPEED_MULTIPLIER).toFloat() // report actual speed
                     accuracy         = 4f   // GPS-grade accuracy
+                    bearing          = 0f
                     time             = System.currentTimeMillis()
                     elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
                 }

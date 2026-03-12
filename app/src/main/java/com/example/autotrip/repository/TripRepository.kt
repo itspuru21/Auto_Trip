@@ -119,7 +119,8 @@ class TripRepository {
             companions  = (getLong("companions")   ?: 0L).toInt(),
             cost        = getDouble("cost")        ?: 0.0,
             status      = getString("status")      ?: "",
-            date        = getString("date")        ?: ""
+            date        = getString("date")        ?: "",
+            distanceKm  = getDouble("distanceKm")  ?: 0.0
         )
 
     private fun Trip.toMap(): Map<String, Any> = mapOf(
@@ -132,6 +133,7 @@ class TripRepository {
         "companions"  to companions,
         "cost"        to cost,
         "status"      to status,
-        "date"        to date
+        "date"        to date,
+        "distanceKm"  to distanceKm
     )
 }
