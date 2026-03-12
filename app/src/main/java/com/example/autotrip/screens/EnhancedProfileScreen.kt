@@ -402,7 +402,9 @@ fun SettingsSection(onDeleteAccount: () -> Unit) {
         // --- Danger Zone ---
         SectionCard(title = "Account", icon = Icons.Default.ManageAccounts) {
             Text(
-                "Deleting your account is permanent. All your trip data and profile information will be removed from our servers.",
+                "Deleting your account is permanent. " +
+                        "All your trip data and profile information will be removed from our servers."+
+                        "Please close the Application after deleting account to confirm deleting.",
                 style = MaterialTheme.typography.bodySmall,
                 color = Color.Gray,
                 modifier = Modifier.padding(bottom = 12.dp)
