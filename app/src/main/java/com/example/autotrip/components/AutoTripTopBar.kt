@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.autotrip.state.SyncState
+import com.example.autotrip.viewmodel.AuthViewModel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -25,12 +26,12 @@ import kotlinx.coroutines.launch
 fun AutoTripTopBar(
     navController: NavController,
     currentRoute: String,
-    title: String
+    title: String,
+    authViewModel: AuthViewModel? = null   // optional — only needed on screens with logout
 ) {
     val scope = rememberCoroutineScope()
     val showBackButton = currentRoute != "home"
 
-    // Pulse animation only active while syncing
     val infiniteTransition = rememberInfiniteTransition(label = "syncPulse")
     val syncScale by infiniteTransition.animateFloat(
         initialValue = 1f,
@@ -69,7 +70,6 @@ fun AutoTripTopBar(
             }
         },
         actions = {
-            // Offline indicator dot
             if (SyncState.isOffline.value) {
                 Box(
                     modifier = Modifier
@@ -79,7 +79,6 @@ fun AutoTripTopBar(
                 )
             }
 
-            // Cloud sync button with pulse animation
             IconButton(
                 onClick = {
                     scope.launch {
@@ -97,7 +96,6 @@ fun AutoTripTopBar(
                 )
             }
 
-            // Notifications button
             IconButton(onClick = { navController.navigate("notifications") }) {
                 Icon(
                     imageVector = Icons.Default.Notifications,
@@ -106,11 +104,14 @@ fun AutoTripTopBar(
                 )
             }
 
-            // Direct logout button
+            // Logout — calls authViewModel.logout() FIRST to clear the Firebase session,
+            // then navigates. Without this, isAlreadyLoggedIn stays true on next launch.
             IconButton(
                 onClick = {
+                    authViewModel?.logout()
                     navController.navigate("auth") {
-                        popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                        popUpTo(0) { inclusive = true }
+                        launchSingleTop = true
                     }
                 }
             ) {

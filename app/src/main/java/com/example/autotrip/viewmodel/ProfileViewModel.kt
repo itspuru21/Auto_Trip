@@ -20,12 +20,11 @@ class ProfileViewModel : ViewModel() {
     private val _saveState = MutableStateFlow<SaveState>(SaveState.Idle)
     val saveState: StateFlow<SaveState> = _saveState
 
-    private val _deleteState = MutableStateFlow<DeleteState>(DeleteState.Idle)
-    val deleteState: StateFlow<DeleteState> = _deleteState
+    // Only drives the loading spinner in the delete dialog — NOT used for navigation
+    private val _isDeleting = MutableStateFlow(false)
+    val isDeleting: StateFlow<Boolean> = _isDeleting
 
-    init {
-        loadProfile()
-    }
+    init { loadProfile() }
 
     fun loadProfile() {
         val uid = authRepo.currentUser?.uid
@@ -65,39 +64,38 @@ class ProfileViewModel : ViewModel() {
     }
 
     /**
-     * Permanently deletes the Firestore profile document AND
-     * the Firebase Auth account. After this the user must sign up again.
+     * Deletes Firestore data + Firebase Auth account, clears local session.
+     * Navigation is handled via [onDeleted] callback — called directly when done.
+     * We do NOT use a StateFlow for navigation to avoid LaunchedEffect timing issues.
      */
-    fun deleteAccount() {
+    fun deleteAccount(onDeleted: () -> Unit, onError: (String) -> Unit) {
         val uid = authRepo.currentUser?.uid
-        if (uid == null) {
-            _deleteState.value = DeleteState.Error("Not logged in")
-            return
-        }
+        if (uid == null) { onError("Not logged in"); return }
+
         viewModelScope.launch {
-            _deleteState.value = DeleteState.Deleting
-            // 1. Delete Firestore document
+            _isDeleting.value = true
+
             val firestoreResult = userRepo.deleteUserProfile(uid)
             if (firestoreResult.isFailure) {
-                _deleteState.value = DeleteState.Error(
-                    firestoreResult.exceptionOrNull()?.message ?: "Failed to delete profile data"
-                )
+                _isDeleting.value = false
+                onError(firestoreResult.exceptionOrNull()?.message ?: "Failed to delete data")
                 return@launch
             }
-            // 2. Delete Firebase Auth account
+
             val authResult = authRepo.deleteAccount()
-            _deleteState.value = if (authResult.isSuccess) {
-                DeleteState.Deleted
-            } else {
-                DeleteState.Error(
-                    authResult.exceptionOrNull()?.message ?: "Failed to delete account"
-                )
+            if (authResult.isFailure) {
+                _isDeleting.value = false
+                onError(authResult.exceptionOrNull()?.message ?: "Failed to delete account")
+                return@launch
             }
+
+            authRepo.logout()          // clear local session token
+            _isDeleting.value = false
+            onDeleted()                // fire nav callback directly — no StateFlow lag
         }
     }
 
     fun resetSaveState() { _saveState.value = SaveState.Idle }
-    fun resetDeleteState() { _deleteState.value = DeleteState.Idle }
 }
 
 sealed class ProfileUiState {
@@ -111,11 +109,4 @@ sealed class SaveState {
     object Saving : SaveState()
     object Saved : SaveState()
     data class Error(val message: String) : SaveState()
-}
-
-sealed class DeleteState {
-    object Idle : DeleteState()
-    object Deleting : DeleteState()
-    object Deleted : DeleteState()
-    data class Error(val message: String) : DeleteState()
 }

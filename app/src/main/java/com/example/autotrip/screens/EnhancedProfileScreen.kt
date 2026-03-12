@@ -28,10 +28,10 @@ import androidx.navigation.compose.rememberNavController
 import com.example.autotrip.components.BottomNavigationBar
 import com.example.autotrip.model.EnhancedUserProfile
 import com.example.autotrip.ui.theme.AutoTripTheme
-import com.example.autotrip.viewmodel.DeleteState
 import com.example.autotrip.viewmodel.ProfileUiState
 import com.example.autotrip.viewmodel.ProfileViewModel
 import com.example.autotrip.viewmodel.SaveState
+import kotlinx.coroutines.launch
 
 /* =====================================================================
    MAIN SCREEN
@@ -44,15 +44,16 @@ fun EnhancedProfileScreen(
 ) {
     val profileState by profileViewModel.profileState.collectAsState()
     val saveState by profileViewModel.saveState.collectAsState()
-    val deleteState by profileViewModel.deleteState.collectAsState()
+    val isDeleting by profileViewModel.isDeleting.collectAsState()
 
     var selectedSection by remember { mutableStateOf(0) }
     var editMode by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
-    // React to save state
+    // Save state feedback
     LaunchedEffect(saveState) {
         when (saveState) {
             is SaveState.Saved -> {
@@ -62,22 +63,6 @@ fun EnhancedProfileScreen(
             is SaveState.Error -> {
                 snackbarHostState.showSnackbar((saveState as SaveState.Error).message)
                 profileViewModel.resetSaveState()
-            }
-            else -> {}
-        }
-    }
-
-    // React to delete state — navigate to auth on success
-    LaunchedEffect(deleteState) {
-        when (deleteState) {
-            is DeleteState.Deleted -> {
-                navController.navigate("auth") {
-                    popUpTo(navController.graph.startDestinationId) { inclusive = true }
-                }
-            }
-            is DeleteState.Error -> {
-                snackbarHostState.showSnackbar((deleteState as DeleteState.Error).message)
-                profileViewModel.resetDeleteState()
             }
             else -> {}
         }
@@ -130,7 +115,7 @@ fun EnhancedProfileScreen(
                             selectedIndex = selectedSection,
                             onSelect = {
                                 selectedSection = it
-                                editMode = false   // close edit sheet when switching tabs
+                                editMode = false
                             }
                         )
 
@@ -144,11 +129,10 @@ fun EnhancedProfileScreen(
                             )
                         }
 
-                        // Bottom padding so FAB doesn't overlap last card
                         Spacer(Modifier.height(100.dp))
                     }
 
-                    // FAB — shown on Personal (0) and Additional (1) tabs
+                    // FAB on Personal and Additional tabs
                     if (selectedSection == 0 || selectedSection == 1) {
                         FloatingActionButton(
                             onClick = { editMode = true },
@@ -161,7 +145,7 @@ fun EnhancedProfileScreen(
                         }
                     }
 
-                    // Edit bottom sheet overlay
+                    // Edit bottom sheet
                     if (selectedSection == 0 || selectedSection == 1) {
                         Box(modifier = Modifier.align(Alignment.BottomCenter)) {
                             EditProfileBottomSheet(
@@ -185,15 +169,28 @@ fun EnhancedProfileScreen(
     // Delete confirmation dialog
     if (showDeleteDialog) {
         DeleteAccountDialog(
-            isDeleting = deleteState is DeleteState.Deleting,
+            isDeleting = isDeleting,
             onConfirm = {
-                showDeleteDialog = false
-                profileViewModel.deleteAccount()
+                profileViewModel.deleteAccount(
+                    onDeleted = {
+                        showDeleteDialog = false
+                        scope.launch {
+                            snackbarHostState.showSnackbar(
+                                "Account deleted. Please restart the app."
+                            )
+                        }
+                    },
+                    onError = { msg ->
+                        showDeleteDialog = false
+                        scope.launch { snackbarHostState.showSnackbar(msg) }
+                    }
+                )
             },
-            onDismiss = { showDeleteDialog = false }
+            onDismiss = { if (!isDeleting) showDeleteDialog = false }
         )
     }
 }
+
 
 /* =====================================================================
    PROFILE HEADER

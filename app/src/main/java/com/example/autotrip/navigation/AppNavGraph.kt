@@ -8,12 +8,6 @@ import androidx.navigation.navArgument
 import com.example.autotrip.screens.*
 import com.example.autotrip.viewmodel.AuthViewModel
 
-/**
- * Main navigation graph for AutoTrip.
- *
- * Flow on fresh install:   onboarding → auth → permissions (signup) → home
- * Flow if already logged in:  onboarding → home  (auth is skipped)
- */
 fun NavGraphBuilder.appNavGraph(
     navController: NavHostController,
     authViewModel: AuthViewModel
@@ -22,13 +16,8 @@ fun NavGraphBuilder.appNavGraph(
     composable("onboarding") {
         OnboardingScreen(
             onContinue = {
-                if (authViewModel.isAlreadyLoggedIn) {
-                    // User session exists — skip auth, go directly to home
-                    navController.navigate("home") {
-                        popUpTo("onboarding") { inclusive = true }
-                    }
-                } else {
-                    navController.navigate("auth")
+                navController.navigate("auth") {
+                    popUpTo("onboarding") { inclusive = true }
                 }
             }
         )
@@ -65,17 +54,17 @@ fun NavGraphBuilder.appNavGraph(
         )
     }
 
-    composable("home") { HomeScreen(navController) }
-    composable("my_trips") { MyTripsScreen(navController) }
+    composable("home") { HomeScreen(navController, authViewModel) }
+    composable("my_trips") { MyTripsScreen(navController, authViewModel) }
     composable("profile") { EnhancedProfileScreen(navController) }
-    composable("active_tracking") { ActiveTrackingScreen(navController) }
-    composable("notifications") { NotificationScreen(navController) }
+    composable("active_tracking") { ActiveTrackingScreen(navController, authViewModel) }
+    composable("notifications") { NotificationScreen(navController, authViewModel) }
 
     composable(
         route = "trip_details/{tripId}",
         arguments = listOf(navArgument("tripId") { type = NavType.StringType })
     ) { backStackEntry ->
         val tripId = backStackEntry.arguments?.getString("tripId").orEmpty()
-        TripDetailsScreen(navController, tripId = tripId)
+        TripDetailsScreen(navController, tripId = tripId, authViewModel = authViewModel)
     }
 }

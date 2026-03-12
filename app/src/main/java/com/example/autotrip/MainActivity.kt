@@ -12,7 +12,6 @@ import com.example.autotrip.viewmodel.AuthViewModel
 
 class MainActivity : ComponentActivity() {
 
-    // AuthViewModel lives at the Activity level so it survives screen recompositions
     private val authViewModel: AuthViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -22,9 +21,13 @@ class MainActivity : ComponentActivity() {
             AutoTripTheme {
                 val navController = rememberNavController()
 
+                // If a session already exists, skip onboarding and go straight to home.
+                // This is evaluated once at startup — same cost as before, just moved here.
+                val startDestination = if (authViewModel.isAlreadyLoggedIn) "home" else "onboarding"
+
                 NavHost(
                     navController = navController,
-                    startDestination = "onboarding"
+                    startDestination = startDestination
                 ) {
                     appNavGraph(
                         navController = navController,

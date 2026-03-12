@@ -17,19 +17,14 @@ import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.autotrip.components.AutoTripTopBar
 import com.example.autotrip.ui.theme.AutoTripTheme
+import com.example.autotrip.viewmodel.AuthViewModel
 
-data class NotificationItem(
-    val id: Int,
-    val title: String,
-    val description: String,
-    val timeAgo: String
-)
+data class NotificationItem(val id: Int, val title: String, val description: String, val timeAgo: String)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NotificationScreen(navController: NavController) {
+fun NotificationScreen(navController: NavController, authViewModel: AuthViewModel? = null) {
 
-    // Demo notifications
     val notifications = remember {
         listOf(
             NotificationItem(1, "Trip Completed", "Your trip to Work was logged successfully.", "Just now"),
@@ -43,68 +38,36 @@ fun NotificationScreen(navController: NavController) {
             AutoTripTopBar(
                 navController = navController,
                 currentRoute = "notifications",
-                title = "Notifications"
+                title = "Notifications",
+                authViewModel = authViewModel
             )
         }
     ) { padding ->
 
         if (notifications.isEmpty()) {
-            // ------------------ Empty State ------------------
             Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
+                modifier = Modifier.fillMaxSize().padding(padding),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-
-                // fade + scale animation
                 var visible by remember { mutableStateOf(false) }
                 LaunchedEffect(Unit) { visible = true }
-
-                AnimatedVisibility(
-                    visible = visible,
-                    enter = fadeIn(tween(700)) + scaleIn(tween(700))
-                ) {
-                    Icon(
-                        Icons.Default.Notifications,
-                        contentDescription = null,
-                        tint = Color.Gray.copy(alpha = 0.5f),
-                        modifier = Modifier.size(80.dp)
-                    )
+                AnimatedVisibility(visible = visible, enter = fadeIn(tween(700)) + scaleIn(tween(700))) {
+                    Icon(Icons.Default.Notifications, contentDescription = null, tint = Color.Gray.copy(alpha = 0.5f), modifier = Modifier.size(80.dp))
                 }
-
                 Spacer(Modifier.height(12.dp))
-
-                Text(
-                    text = "No notifications",
-                    color = Color.Gray,
-                    style = MaterialTheme.typography.bodyLarge
-                )
+                Text(text = "No notifications", color = Color.Gray, style = MaterialTheme.typography.bodyLarge)
             }
         } else {
-            // ------------------ Animated Notification List ------------------
             LazyColumn(
-                modifier = Modifier
-                    .padding(padding)
-                    .fillMaxSize(),
+                modifier = Modifier.padding(padding).fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(16.dp)
             ) {
-
                 itemsIndexed(notifications) { index, item ->
-
-                    // staggered animation
                     var visible by remember { mutableStateOf(false) }
-                    LaunchedEffect(Unit) {
-                        kotlinx.coroutines.delay(index * 120L)
-                        visible = true
-                    }
-
-                    AnimatedVisibility(
-                        visible = visible,
-                        enter = slideInVertically(tween(400)) + fadeIn(tween(400))
-                    ) {
+                    LaunchedEffect(Unit) { kotlinx.coroutines.delay(index * 120L); visible = true }
+                    AnimatedVisibility(visible = visible, enter = slideInVertically(tween(400)) + fadeIn(tween(400))) {
                         NotificationCard(item)
                     }
                 }
@@ -115,7 +78,6 @@ fun NotificationScreen(navController: NavController) {
 
 @Composable
 fun NotificationCard(item: NotificationItem) {
-
     Card(
         shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -123,28 +85,11 @@ fun NotificationCard(item: NotificationItem) {
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = item.title,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = 18.sp
-            )
-
+            Text(text = item.title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, fontSize = 18.sp)
             Spacer(Modifier.height(4.dp))
-
-            Text(
-                text = item.description,
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.Gray
-            )
-
+            Text(text = item.description, style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
             Spacer(Modifier.height(8.dp))
-
-            Text(
-                text = item.timeAgo,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary
-            )
+            Text(text = item.timeAgo, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
         }
     }
 }
@@ -152,7 +97,5 @@ fun NotificationCard(item: NotificationItem) {
 @Preview(showBackground = true, showSystemUi = true)
 @Composable
 fun PreviewNotificationScreen() {
-    AutoTripTheme {
-        NotificationScreen(rememberNavController())
-    }
+    AutoTripTheme { NotificationScreen(rememberNavController()) }
 }

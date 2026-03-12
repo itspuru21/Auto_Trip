@@ -5,7 +5,6 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Directions
@@ -27,54 +26,36 @@ import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.autotrip.components.AutoTripTopBar
 import com.example.autotrip.ui.theme.AutoTripTheme
+import com.example.autotrip.viewmodel.AuthViewModel
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ActiveTrackingScreen(navController: NavController) {
+fun ActiveTrackingScreen(navController: NavController, authViewModel: AuthViewModel? = null) {
 
     var showBottomCard by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        delay(150)
-        showBottomCard = true
-    }
+    LaunchedEffect(Unit) { delay(150); showBottomCard = true }
 
     Scaffold(
         topBar = {
             AutoTripTopBar(
                 navController = navController,
                 currentRoute = "active_tracking",
-                title = "Active Tracking"
+                title = "Active Tracking",
+                authViewModel = authViewModel
             )
         }
     ) { padding ->
-
-        Column(
-            modifier = Modifier
-                .padding(padding)
-                .fillMaxSize()
-        ) {
-
-            // ***** FIXED: MAP TAKES 55% OF SCREEN *****
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.55f)
-            ) {
+        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+            Box(modifier = Modifier.fillMaxWidth().fillMaxHeight(0.55f)) {
                 AnimatedPlaceholderMap()
             }
-
-            // ***** BOTTOM CARD TAKES 45% *****
             AnimatedVisibility(
                 visible = showBottomCard,
                 enter = fadeIn(tween(600)) + slideInVertically { it / 2 },
                 exit = fadeOut()
             ) {
-                TrackingStatsSection(
-                    onEndTrip = {
-                        navController.navigate("trip_details/AT-001")
-                    }
-                )
+                TrackingStatsSection(onEndTrip = { navController.navigate("trip_details/AT-001") })
             }
         }
     }
@@ -82,24 +63,13 @@ fun ActiveTrackingScreen(navController: NavController) {
 
 @Composable
 private fun AnimatedPlaceholderMap() {
-
     val infinite = rememberInfiniteTransition(label = "pulse")
     val pulse by infinite.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.4f,
-        animationSpec = infiniteRepeatable(
-            tween(800, easing = LinearOutSlowInEasing),
-            RepeatMode.Reverse
-        )
+        initialValue = 1f, targetValue = 1.4f,
+        animationSpec = infiniteRepeatable(tween(800, easing = LinearOutSlowInEasing), RepeatMode.Reverse)
     )
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFE1E1E1))
-    ) {
-
-        // dashed route
+    Box(modifier = Modifier.fillMaxSize().background(Color(0xFFE1E1E1))) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             drawLine(
                 color = Color(0xFF1976D2),
@@ -109,43 +79,17 @@ private fun AnimatedPlaceholderMap() {
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(25f, 18f))
             )
         }
-
-        // Start pin
-        Box(
-            modifier = Modifier
-                .offset(x = 35.dp, y = 180.dp)
-                .size(26.dp)
-                .background(Color(0xFF2E7D32), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
+        Box(modifier = Modifier.offset(x = 35.dp, y = 180.dp).size(26.dp).background(Color(0xFF2E7D32), CircleShape), contentAlignment = Alignment.Center) {
             Text("S", color = Color.White, fontSize = 12.sp)
         }
-
-        // Current location pin — use BoxWithConstraints to avoid overflow
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier
-                    .offset(x = maxWidth * 0.78f, y = 180.dp)
-                    .size((24.dp * pulse)),
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(22.dp)
-                        .background(Color(0xFF1976D2), CircleShape)
-                )
+            Box(modifier = Modifier.offset(x = maxWidth * 0.78f, y = 180.dp).size((24.dp * pulse)), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.size(22.dp).background(Color(0xFF1976D2), CircleShape))
             }
         }
-
-        // status text
         Text(
-            "Tracking your route...",
-            color = Color.White,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(12.dp)
-                .background(Color.Black.copy(alpha = 0.55f))
-                .padding(horizontal = 14.dp, vertical = 6.dp),
+            "Tracking your route...", color = Color.White,
+            modifier = Modifier.align(Alignment.TopCenter).padding(12.dp).background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 14.dp, vertical = 6.dp),
             fontSize = 14.sp
         )
     }
@@ -153,48 +97,26 @@ private fun AnimatedPlaceholderMap() {
 
 @Composable
 private fun TrackingStatsSection(onEndTrip: () -> Unit) {
-
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(300.dp),   // ⬅ NEW — increased height
+        modifier = Modifier.fillMaxWidth().height(300.dp),
         shape = MaterialTheme.shapes.extraLarge,
         colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(10.dp)
     ) {
         Column(
-            modifier = Modifier
-                .padding(24.dp)
-                .fillMaxHeight(),   // safer than fillMaxSize
+            modifier = Modifier.padding(24.dp).fillMaxHeight(),
             verticalArrangement = Arrangement.SpaceBetween,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceAround
-            ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
                 TrackingStat("Duration", "00:12:45", Icons.Default.Schedule)
                 TrackingStat("Distance", "3.4 km", Icons.Default.Directions)
             }
-
-            // END TRIP Button
             var pressed by remember { mutableStateOf(false) }
-            val scale by animateFloatAsState(
-                targetValue = if (pressed) 0.92f else 1f,
-                animationSpec = tween(150),
-                label = ""
-            )
-
+            val scale by animateFloatAsState(targetValue = if (pressed) 0.92f else 1f, animationSpec = tween(150), label = "")
             Button(
-                onClick = {
-                    pressed = true
-                    onEndTrip()
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(55.dp)
-                    .scale(scale),
+                onClick = { pressed = true; onEndTrip() },
+                modifier = Modifier.fillMaxWidth().height(55.dp).scale(scale),
                 colors = ButtonDefaults.buttonColors(Color(0xFFD32F2F)),
                 shape = MaterialTheme.shapes.medium
             ) {
@@ -202,37 +124,17 @@ private fun TrackingStatsSection(onEndTrip: () -> Unit) {
                 Spacer(Modifier.width(8.dp))
                 Text("End Trip", color = Color.White, fontSize = 16.sp)
             }
-
-            Text(
-                "AutoTrip is actively recording using GPS…",
-                fontSize = 12.sp,
-                color = Color.Gray
-            )
+            Text("AutoTrip is actively recording using GPS…", fontSize = 12.sp, color = Color.Gray)
         }
     }
-
 }
 
 @Composable
 fun TrackingStat(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
-
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(28.dp)
-        )
-
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
         Spacer(Modifier.height(6.dp))
-
-        Text(
-            value,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-        )
-
+        Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Text(label, fontSize = 12.sp, color = Color.Gray)
     }
 }
@@ -240,7 +142,5 @@ fun TrackingStat(label: String, value: String, icon: androidx.compose.ui.graphic
 @Preview(showBackground = true, showSystemUi = true)
 @Composable
 fun PreviewActiveTrackingScreen() {
-    AutoTripTheme {
-        ActiveTrackingScreen(rememberNavController())
-    }
+    AutoTripTheme { ActiveTrackingScreen(rememberNavController()) }
 }
