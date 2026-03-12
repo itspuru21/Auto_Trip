@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "115319569692",
+    "project_id": "autotrip-12131",
+    "storage_bucket": "autotrip-12131.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:115319569692:android:baa075cfed355301074ed9",
+        "android_client_info": {
+          "package_name": "com.example.autotrip"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCIwELv_bFVgm0TJ1Aq9yMnn8_G704MMxc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

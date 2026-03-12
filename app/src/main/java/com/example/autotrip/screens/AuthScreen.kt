@@ -22,18 +22,32 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.navigation.NavController
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.rememberNavController
 import com.example.autotrip.R
 import com.example.autotrip.ui.theme.AutoTripTheme
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import com.example.autotrip.viewmodel.AuthUiState
+import com.example.autotrip.viewmodel.AuthViewModel
 
 @Composable
-fun AuthScreen(onLoginSuccess: () -> Unit,
-               onSignupSelected: () -> Unit) {
-
+fun AuthScreen(
+    onLoginSuccess: () -> Unit,
+    onSignupSelected: () -> Unit,
+    authViewModel: AuthViewModel = viewModel()
+) {
     var isLogin by remember { mutableStateOf(true) }
+    val uiState by authViewModel.uiState.collectAsState()
+
+    // React to success state — navigate away
+    LaunchedEffect(uiState) {
+        when (uiState) {
+            is AuthUiState.Success -> {
+                if (isLogin) onLoginSuccess() else onSignupSelected()
+                authViewModel.resetState()
+            }
+            else -> {}
+        }
+    }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -48,7 +62,7 @@ fun AuthScreen(onLoginSuccess: () -> Unit,
 
             Spacer(Modifier.height(50.dp))
 
-            // ---------------- LOGO ----------------
+            // Logo
             Box(
                 modifier = Modifier
                     .size(90.dp)
@@ -79,7 +93,7 @@ fun AuthScreen(onLoginSuccess: () -> Unit,
 
             Spacer(Modifier.height(30.dp))
 
-            // ---------------- WHITE CARD ----------------
+            // White Card
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -92,25 +106,47 @@ fun AuthScreen(onLoginSuccess: () -> Unit,
 
                     Spacer(Modifier.height(24.dp))
 
+                    // Show error if any
+                    if (uiState is AuthUiState.Error) {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = (uiState as AuthUiState.Error).message,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
+                    }
+
+                    val isLoading = uiState is AuthUiState.Loading
+
                     if (isLogin) {
                         LoginForm(
-                            onLogin = {
-                                onLoginSuccess()
-//                                navController.navigate("home") {
-//                                    popUpTo("auth") { inclusive = true }
-//                                }
+                            isLoading = isLoading,
+                            onLogin = { email, password ->
+                                authViewModel.login(email, password)
                             },
-                            onMoveToSignup = { isLogin = false }
+                            onMoveToSignup = {
+                                authViewModel.resetState()
+                                isLogin = false
+                            }
                         )
                     } else {
                         SignupForm(
-                            onSignup = {
-                                onSignupSelected()
-//                                navController.navigate("permissions") {
-//                                    popUpTo("auth") { inclusive = true }
-//                                }
+                            isLoading = isLoading,
+                            onSignup = { fullName, email, password ->
+                                authViewModel.signUp(fullName, email, password)
                             },
-                            onMoveToLogin = { isLogin = true }
+                            onMoveToLogin = {
+                                authViewModel.resetState()
+                                isLogin = true
+                            }
                         )
                     }
                 }
@@ -130,35 +166,33 @@ fun AuthToggle(isLogin: Boolean, onToggle: () -> Unit) {
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (isLogin) MaterialTheme.colorScheme.primary else Color.LightGray
             )
-        ) {
-            Text("Login")
-        }
+        ) { Text("Login") }
 
         Button(
             onClick = { if (isLogin) onToggle() },
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (!isLogin) MaterialTheme.colorScheme.primary else Color.LightGray
             )
-        ) {
-            Text("Sign Up")
-        }
+        ) { Text("Sign Up") }
     }
 }
 
 @Composable
-fun LoginForm(onLogin: () -> Unit, onMoveToSignup: () -> Unit) {
+fun LoginForm(
+    isLoading: Boolean,
+    onLogin: (email: String, password: String) -> Unit,
+    onMoveToSignup: () -> Unit
+) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var visible by remember { mutableStateOf(false) }
-    var loading by remember { mutableStateOf(false) }
-
-    val scope = rememberCoroutineScope()
 
     OutlinedTextField(
         value = email,
         onValueChange = { email = it },
         label = { Text("Email") },
         modifier = Modifier.fillMaxWidth(),
+        enabled = !isLoading,
         colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = MaterialTheme.colorScheme.primary
         )
@@ -171,6 +205,7 @@ fun LoginForm(onLogin: () -> Unit, onMoveToSignup: () -> Unit) {
         onValueChange = { password = it },
         label = { Text("Password") },
         modifier = Modifier.fillMaxWidth(),
+        enabled = !isLoading,
         trailingIcon = {
             IconButton(onClick = { visible = !visible }) {
                 Icon(
@@ -188,22 +223,12 @@ fun LoginForm(onLogin: () -> Unit, onMoveToSignup: () -> Unit) {
     Spacer(Modifier.height(24.dp))
 
     Button(
-        onClick = {
-            scope.launch {
-                loading = true
-                delay(1000)
-                loading = false
-                onLogin()
-            }
-        },
+        onClick = { onLogin(email, password) },
         modifier = Modifier.fillMaxWidth(),
-        enabled = email.isNotEmpty() && password.isNotEmpty()
+        enabled = email.isNotEmpty() && password.isNotEmpty() && !isLoading
     ) {
-        if (loading) {
-            CircularProgressIndicator(
-                color = Color.White,
-                modifier = Modifier.size(20.dp)
-            )
+        if (isLoading) {
+            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
         } else {
             Text("Login")
         }
@@ -217,22 +242,26 @@ fun LoginForm(onLogin: () -> Unit, onMoveToSignup: () -> Unit) {
 }
 
 @Composable
-fun SignupForm(onSignup: () -> Unit, onMoveToLogin: () -> Unit) {
+fun SignupForm(
+    isLoading: Boolean,
+    onSignup: (fullName: String, email: String, password: String) -> Unit,
+    onMoveToLogin: () -> Unit
+) {
     var fullName by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var visible by remember { mutableStateOf(false) }
     var confirmVisible by remember { mutableStateOf(false) }
-    var loading by remember { mutableStateOf(false) }
 
-    val scope = rememberCoroutineScope()
+    val passwordsMatch = password == confirmPassword || confirmPassword.isEmpty()
 
     OutlinedTextField(
         value = fullName,
         onValueChange = { fullName = it },
         label = { Text("Full Name") },
         modifier = Modifier.fillMaxWidth(),
+        enabled = !isLoading
     )
 
     Spacer(Modifier.height(16.dp))
@@ -242,6 +271,7 @@ fun SignupForm(onSignup: () -> Unit, onMoveToLogin: () -> Unit) {
         onValueChange = { email = it },
         label = { Text("Email") },
         modifier = Modifier.fillMaxWidth(),
+        enabled = !isLoading
     )
 
     Spacer(Modifier.height(16.dp))
@@ -251,6 +281,7 @@ fun SignupForm(onSignup: () -> Unit, onMoveToLogin: () -> Unit) {
         onValueChange = { password = it },
         label = { Text("Password") },
         modifier = Modifier.fillMaxWidth(),
+        enabled = !isLoading,
         visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
         trailingIcon = {
             IconButton(onClick = { visible = !visible }) {
@@ -269,6 +300,11 @@ fun SignupForm(onSignup: () -> Unit, onMoveToLogin: () -> Unit) {
         onValueChange = { confirmPassword = it },
         label = { Text("Confirm Password") },
         modifier = Modifier.fillMaxWidth(),
+        enabled = !isLoading,
+        isError = !passwordsMatch,
+        supportingText = {
+            if (!passwordsMatch) Text("Passwords do not match", color = MaterialTheme.colorScheme.error)
+        },
         visualTransformation = if (confirmVisible) VisualTransformation.None else PasswordVisualTransformation(),
         trailingIcon = {
             IconButton(onClick = { confirmVisible = !confirmVisible }) {
@@ -283,25 +319,16 @@ fun SignupForm(onSignup: () -> Unit, onMoveToLogin: () -> Unit) {
     Spacer(Modifier.height(24.dp))
 
     Button(
-        onClick = {
-            scope.launch {
-                loading = true
-                delay(1000)
-                loading = false
-                onSignup()
-            }
-        },
+        onClick = { onSignup(fullName, email, password) },
         modifier = Modifier.fillMaxWidth(),
         enabled = fullName.isNotEmpty()
                 && email.isNotEmpty()
                 && password.isNotEmpty()
                 && confirmPassword == password
+                && !isLoading
     ) {
-        if (loading) {
-            CircularProgressIndicator(
-                color = Color.White,
-                modifier = Modifier.size(20.dp)
-            )
+        if (isLoading) {
+            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
         } else {
             Text("Create Account")
         }
@@ -310,7 +337,7 @@ fun SignupForm(onSignup: () -> Unit, onMoveToLogin: () -> Unit) {
     Spacer(Modifier.height(16.dp))
 
     TextButton(onClick = onMoveToLogin, modifier = Modifier.fillMaxWidth()) {
-        Text("Already have an account? Login", textAlign = TextAlign.Center )
+        Text("Already have an account? Login", textAlign = TextAlign.Center)
     }
 }
 

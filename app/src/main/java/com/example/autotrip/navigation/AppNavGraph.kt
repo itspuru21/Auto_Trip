@@ -6,21 +6,37 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.example.autotrip.screens.*
+import com.example.autotrip.viewmodel.AuthViewModel
 
 /**
  * Main navigation graph for AutoTrip.
- * Flow: onboarding → auth → permissions (signup only) → home
+ *
+ * Flow on fresh install:   onboarding → auth → permissions (signup) → home
+ * Flow if already logged in:  onboarding → home  (auth is skipped)
  */
-fun NavGraphBuilder.appNavGraph(navController: NavHostController) {
+fun NavGraphBuilder.appNavGraph(
+    navController: NavHostController,
+    authViewModel: AuthViewModel
+) {
 
     composable("onboarding") {
         OnboardingScreen(
-            onContinue = { navController.navigate("auth") }
+            onContinue = {
+                if (authViewModel.isAlreadyLoggedIn) {
+                    // User session exists — skip auth, go directly to home
+                    navController.navigate("home") {
+                        popUpTo("onboarding") { inclusive = true }
+                    }
+                } else {
+                    navController.navigate("auth")
+                }
+            }
         )
     }
 
     composable("auth") {
         AuthScreen(
+            authViewModel = authViewModel,
             onLoginSuccess = {
                 navController.navigate("home") {
                     popUpTo("auth") { inclusive = true }
