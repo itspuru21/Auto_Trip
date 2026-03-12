@@ -5,58 +5,35 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.NotificationsNone
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.*
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.autotrip.components.AutoTripTopBar
 import com.example.autotrip.ui.theme.AutoTripTheme
+import com.example.autotrip.viewmodel.AppNotification
 import com.example.autotrip.viewmodel.AuthViewModel
-import kotlinx.coroutines.delay
-
-data class NotificationItem(
-    val id          : Int,
-    val title       : String,
-    val description : String,
-    val timeAgo     : String,
-    val type        : NotifType = NotifType.INFO
-)
-
-enum class NotifType { TRIP_COMPLETE, NEEDS_INFO, SYNC, INFO }
+import com.example.autotrip.viewmodel.NotifType
+import com.example.autotrip.viewmodel.NotificationsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NotificationScreen(navController: NavController, authViewModel: AuthViewModel? = null) {
-
-    // In Phase 3 this will come from a NotificationsViewModel backed by Firestore / local DB.
-    // For now we use local mutable state so Clear All works correctly in the UI.
-    var notifications by remember {
-        mutableStateOf(
-            listOf(
-                NotificationItem(1, "Trip Completed",
-                    "Your trip from Home to Work was logged successfully.", "Just now",
-                    NotifType.TRIP_COMPLETE),
-                NotificationItem(2, "Info Needed",
-                    "Trip to Coffee Shop needs additional details — tap to complete.", "10 min ago",
-                    NotifType.NEEDS_INFO),
-                NotificationItem(3, "Sync Successful",
-                    "All trip data has been synced to the NATPAC server.", "2 hours ago",
-                    NotifType.SYNC),
-                NotificationItem(4, "Trip Completed",
-                    "Your trip from Work to Gym was recorded (3.2 km, 18 min).", "3 hours ago",
-                    NotifType.TRIP_COMPLETE)
-            )
-        )
-    }
+fun NotificationScreen(
+    navController : NavController,
+    authViewModel : AuthViewModel? = null
+) {
+    // Phase 3 — real ViewModel backed by Firestore
+    val notifVm: NotificationsViewModel = viewModel()
+    val notifications by notifVm.visibleNotifications.collectAsState()
 
     var showClearConfirm by remember { mutableStateOf(false) }
 
@@ -72,7 +49,7 @@ fun NotificationScreen(navController: NavController, authViewModel: AuthViewMode
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
 
-            // Action bar — only show when there are notifications
+            // Action bar
             AnimatedVisibility(visible = notifications.isNotEmpty()) {
                 Row(
                     modifier              = Modifier
@@ -88,14 +65,12 @@ fun NotificationScreen(navController: NavController, authViewModel: AuthViewMode
                     )
                     TextButton(
                         onClick = { showClearConfirm = true },
-                        colors  = ButtonDefaults.textButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error
-                        )
+                        contentPadding = PaddingValues(horizontal = 8.dp)
                     ) {
                         Icon(Icons.Default.DeleteSweep, contentDescription = null,
                             modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("Clear All", fontSize = 13.sp)
+                        Text("Clear All", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }
@@ -104,26 +79,23 @@ fun NotificationScreen(navController: NavController, authViewModel: AuthViewMode
                 EmptyNotificationsState()
             } else {
                 LazyColumn(
-                    modifier        = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding  = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
+                    modifier            = Modifier.fillMaxSize(),
+                    contentPadding      = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    itemsIndexed(
-                        items = notifications,
-                        key   = { _, item -> item.id }
-                    ) { index, item ->
-                        var visible by remember { mutableStateOf(false) }
-                        LaunchedEffect(Unit) { delay(index * 100L); visible = true }
-
+                    items(notifications, key = { it.id }) { notif ->
                         AnimatedVisibility(
-                            visible    = visible,
-                            enter      = slideInVertically(tween(380)) { it / 2 } + fadeIn(tween(380)),
-                            exit       = slideOutHorizontally(tween(280)) { it } + fadeOut(tween(200))
+                            visible  = true,
+                            enter    = fadeIn(tween(300)) + slideInVertically(tween(300)),
+                            exit     = fadeOut(tween(200)) + slideOutHorizontally(tween(200))
                         ) {
                             NotificationCard(
-                                item     = item,
-                                onDismiss = {
-                                    notifications = notifications.filter { it.id != item.id }
+                                notif       = notif,
+                                onDismiss   = { notifVm.dismiss(notif.id) },
+                                onTap       = {
+                                    notif.linkedTripId?.let { id ->
+                                        navController.navigate("trip_details/$id")
+                                    }
                                 }
                             )
                         }
@@ -133,21 +105,16 @@ fun NotificationScreen(navController: NavController, authViewModel: AuthViewMode
         }
     }
 
-    // Clear All confirmation
+    // Clear all confirm dialog
     if (showClearConfirm) {
         AlertDialog(
             onDismissRequest = { showClearConfirm = false },
-            icon  = {
-                Icon(Icons.Default.DeleteSweep, contentDescription = null,
-                    tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(28.dp))
-            },
-            title = { Text("Clear All Notifications?", fontWeight = FontWeight.Bold) },
-            text  = { Text("This will remove all ${notifications.size} notifications. This cannot be undone.") },
+            title  = { Text("Clear All Notifications?") },
+            text   = { Text("This removes all notifications from your view. Your trips are not affected.") },
             confirmButton = {
-                Button(
-                    onClick = { notifications = emptyList(); showClearConfirm = false },
-                    colors  = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                ) { Text("Clear All") }
+                TextButton(onClick = { notifVm.dismissAll(); showClearConfirm = false }) {
+                    Text("Clear All", color = MaterialTheme.colorScheme.error)
+                }
             },
             dismissButton = {
                 TextButton(onClick = { showClearConfirm = false }) { Text("Cancel") }
@@ -161,57 +128,62 @@ fun NotificationScreen(navController: NavController, authViewModel: AuthViewMode
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-fun NotificationCard(item: NotificationItem, onDismiss: () -> Unit) {
-    val (accentColor, bgColor) = when (item.type) {
-        NotifType.TRIP_COMPLETE -> Pair(Color(0xFF2E7D32), Color(0xFF2E7D32).copy(alpha = 0.08f))
-        NotifType.NEEDS_INFO    -> Pair(Color(0xFFFF8F00), Color(0xFFFF8F00).copy(alpha = 0.08f))
-        NotifType.SYNC          -> Pair(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
-        NotifType.INFO          -> Pair(MaterialTheme.colorScheme.outline,  Color.Transparent)
+private fun NotificationCard(
+    notif     : AppNotification,
+    onDismiss : () -> Unit,
+    onTap     : () -> Unit
+) {
+    val (bgColor, iconVec, iconTint) = when (notif.type) {
+        NotifType.TRIP_COMPLETE -> Triple(
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+            Icons.Default.CheckCircle,
+            MaterialTheme.colorScheme.primary
+        )
+        NotifType.NEEDS_INFO    -> Triple(
+            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f),
+            Icons.Default.Warning,
+            MaterialTheme.colorScheme.error
+        )
+        NotifType.SYNC          -> Triple(
+            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
+            Icons.Default.Sync,
+            MaterialTheme.colorScheme.secondary
+        )
+        NotifType.INFO          -> Triple(
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            Icons.Default.Info,
+            MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 
     Card(
-        shape     = MaterialTheme.shapes.medium,
-        colors    = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(3.dp),
-        modifier  = Modifier.fillMaxWidth()
+        onClick    = onTap,
+        modifier   = Modifier.fillMaxWidth(),
+        colors     = CardDefaults.cardColors(containerColor = bgColor),
+        elevation  = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
-            modifier          = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            modifier          = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.Top
         ) {
-            // Color accent bar
-            Box(
-                modifier = Modifier
-                    .width(4.dp)
-                    .height(52.dp)
-                    .then(
-                        Modifier.padding(top = 2.dp)
-                    )
-            ) {
-                androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                    drawRoundRect(
-                        color        = accentColor,
-                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(4f)
-                    )
-                }
-            }
+            Icon(iconVec, contentDescription = null,
+                tint     = iconTint,
+                modifier = Modifier.size(22.dp).padding(top = 2.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
-                Text(item.title, style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-                Spacer(Modifier.height(3.dp))
-                Text(item.description, style = MaterialTheme.typography.bodySmall,
+            Spacer(Modifier.width(14.dp))
+
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(notif.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(notif.description, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(6.dp))
-                Text(item.timeAgo, style = MaterialTheme.typography.labelSmall, color = accentColor)
+                Text(notif.timeAgo, style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f))
             }
 
-            // Dismiss (×) button
-            IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
                 Icon(Icons.Default.Close, contentDescription = "Dismiss",
-                    tint     = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.size(16.dp))
+                    modifier = Modifier.size(16.dp),
+                    tint     = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
             }
         }
     }
@@ -224,27 +196,31 @@ fun NotificationCard(item: NotificationItem, onDismiss: () -> Unit) {
 @Composable
 private fun EmptyNotificationsState() {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        var visible by remember { mutableStateOf(false) }
-        LaunchedEffect(Unit) { visible = true }
-        AnimatedVisibility(visible = visible, enter = fadeIn(tween(600)) + scaleIn(tween(600))) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Default.NotificationsNone, contentDescription = null,
-                    tint     = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
-                    modifier = Modifier.size(72.dp))
-                Spacer(Modifier.height(12.dp))
-                Text("All caught up!", style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f))
-                Spacer(Modifier.height(4.dp))
-                Text("No notifications right now",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
-            }
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(Icons.Default.NotificationsNone, contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint     = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f))
+            Text("All caught up!",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f))
+            Text("No new notifications right now.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
         }
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PREVIEW
+// ─────────────────────────────────────────────────────────────────────────────
+
 @Preview(showBackground = true, showSystemUi = true)
 @Composable
-fun PreviewNotificationScreen() {
-    AutoTripTheme { NotificationScreen(rememberNavController()) }
+fun PreviewNotifications() {
+    AutoTripTheme {
+        NotificationScreen(rememberNavController())
+    }
 }

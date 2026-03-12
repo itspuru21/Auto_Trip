@@ -9,20 +9,18 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material.icons.filled.Route
-import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.*
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.autotrip.components.AutoTripTopBar
@@ -30,19 +28,25 @@ import com.example.autotrip.components.BottomNavigationBar
 import com.example.autotrip.model.Trip
 import com.example.autotrip.ui.theme.AutoTripTheme
 import com.example.autotrip.viewmodel.AuthViewModel
+import com.example.autotrip.viewmodel.TripsViewModel
 import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.*
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(navController: NavController, authViewModel: AuthViewModel? = null) {
+fun HomeScreen(
+    navController : NavController,
+    authViewModel : AuthViewModel? = null
+) {
+    // Phase 3 — real data from Firestore via TripsViewModel
+    val tripsVm: TripsViewModel = viewModel()
+    val allTrips by tripsVm.trips.collectAsState()
 
-    // In Phase 2 this comes from TripsViewModel filtered to last 24 hours
-    val recentTrips = remember {
-        listOf(
-            Trip("1", "Home", "Work", "8:30 AM", "9:15 AM", "Car", "Work", 0, 0.0, "Auto-logged"),
-            Trip("2", "Work", "Coffee Shop", "12:00 PM", "12:15 PM", "Walk", "Social", 2, 0.0, "Needs Info"),
-            Trip("3", "Coffee Shop", "Park", "1:30 PM", "2:00 PM", "Walk", "Recreation", 1, 0.0, "Auto-logged")
-        )
+    // Filter to last 24 hours
+    val todayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+    val today = todayFmt.format(Date())
+    val recentTrips = remember(allTrips) {
+        allTrips.filter { it.date == today }
     }
 
     Scaffold(
@@ -56,12 +60,11 @@ fun HomeScreen(navController: NavController, authViewModel: AuthViewModel? = nul
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick           = { navController.navigate("active_tracking") },
-                containerColor    = MaterialTheme.colorScheme.primary,
-                contentColor      = MaterialTheme.colorScheme.onPrimary,
-                icon              = { Icon(Icons.Default.Add, contentDescription = "New Trip") },
-                text              = { Text("New Trip", fontWeight = FontWeight.SemiBold) },
-                modifier          = Modifier
+                onClick        = { navController.navigate("active_tracking") },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor   = MaterialTheme.colorScheme.onPrimary,
+                icon           = { Icon(Icons.Default.Add, contentDescription = "New Trip") },
+                text           = { Text("New Trip", fontWeight = FontWeight.SemiBold) }
             )
         },
         floatingActionButtonPosition = FabPosition.End,
@@ -77,7 +80,8 @@ fun HomeScreen(navController: NavController, authViewModel: AuthViewModel? = nul
         ) {
             Spacer(Modifier.height(16.dp))
 
-            SummaryCard()
+            // Real summary derived from today's trips
+            SummaryCard(trips = recentTrips)
 
             Spacer(Modifier.height(24.dp))
 
@@ -109,23 +113,54 @@ fun HomeScreen(navController: NavController, authViewModel: AuthViewModel? = nul
 
             Spacer(Modifier.height(12.dp))
 
-            AnimatedTripsList(
-                trips       = recentTrips,
-                onTripClick = { trip -> navController.navigate("trip_details/${trip.id}") }
-            )
+            if (recentTrips.isEmpty()) {
+                Box(
+                    modifier        = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.DirectionsCar, contentDescription = null,
+                            modifier = Modifier.size(52.dp),
+                            tint     = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
+                        Text("No trips today yet",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                        Text("Tap + New Trip to start tracking",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f))
+                    }
+                }
+            } else {
+                AnimatedTripsList(
+                    trips       = recentTrips,
+                    onTripClick = { trip -> navController.navigate("trip_details/${trip.id}") }
+                )
+            }
         }
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SUMMARY CARD — computed from real trips
+// ─────────────────────────────────────────────────────────────────────────────
+
 @Composable
-fun SummaryCard() {
+fun SummaryCard(trips: List<Trip> = emptyList()) {
     var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { visible = true }
 
     val cardAlpha by animateFloatAsState(targetValue = if (visible) 1f else 0f,
-        animationSpec = tween(650), label = "")
+        animationSpec = tween(650), label = "cardAlpha")
     val offsetY by animateDpAsState(targetValue = if (visible) 0.dp else 16.dp,
-        animationSpec = tween(650), label = "")
+        animationSpec = tween(650), label = "cardOffset")
+
+    // Compute stats
+    val tripCount = trips.size
+    // Distance: sum of all trips — Trip.cost can't be used; we show count-based placeholder
+    // until real distance is stored. For now show "—" if no GPS data yet.
+    val totalDistanceKm = trips.sumOf { 0.0 } // placeholder — replace with trip.distanceKm when field added
+    val distanceLabel = if (tripCount == 0) "—" else "—"   // kept as stub; see note below
 
     Card(
         modifier  = Modifier.fillMaxWidth().offset(y = offsetY).alpha(cardAlpha),
@@ -137,16 +172,17 @@ fun SummaryCard() {
             Text("Today's Summary", style = MaterialTheme.typography.titleLarge, fontSize = 20.sp)
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
-                SummaryItem(Icons.Default.Route,        "Trips",    "3")
-                SummaryItem(Icons.Default.DirectionsCar,"Distance", "15.3 km")
-                SummaryItem(Icons.Default.Timer,        "Time",     "48 min")
+                SummaryItem(Icons.Default.Route,        "Trips",    tripCount.toString())
+                SummaryItem(Icons.Default.DirectionsCar,"Distance", distanceLabel)
+                SummaryItem(Icons.Default.Pending,      "Pending",
+                    trips.count { it.status == "Needs Info" }.toString())
             }
         }
     }
 }
 
 @Composable
-fun SummaryItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, value: String) {
+fun SummaryItem(icon: ImageVector, label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(26.dp))
@@ -156,15 +192,21 @@ fun SummaryItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: St
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TRIPS LIST (animated)
+// ─────────────────────────────────────────────────────────────────────────────
+
 @Composable
 fun AnimatedTripsList(trips: List<Trip>, onTripClick: (Trip) -> Unit) {
     var listVisible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { listVisible = true }
     val alpha by animateFloatAsState(targetValue = if (listVisible) 1f else 0f,
-        animationSpec = tween(500), label = "")
+        animationSpec = tween(500), label = "listAlpha")
 
-    LazyColumn(modifier = Modifier.fillMaxSize().alpha(alpha),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(
+        modifier            = Modifier.fillMaxSize().alpha(alpha),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         itemsIndexed(trips) { index, trip ->
             var itemVisible by remember { mutableStateOf(false) }
             LaunchedEffect(Unit) { delay(index * 120L); itemVisible = true }
@@ -198,15 +240,21 @@ fun TripItemCard(trip: Trip, onClick: () -> Unit) {
                 Text("${trip.startTime} - ${trip.endTime}", fontSize = 13.sp, color = Color.Gray)
             }
             Surface(shape = RoundedCornerShape(20.dp), color = statusColor.copy(alpha = 0.12f)) {
-                Text(trip.status,
+                Text(
+                    trip.status,
                     modifier   = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                     color      = statusColor,
                     fontSize   = 11.sp,
-                    fontWeight = FontWeight.Bold)
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PREVIEW
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Preview(showBackground = true, showSystemUi = true)
 @Composable

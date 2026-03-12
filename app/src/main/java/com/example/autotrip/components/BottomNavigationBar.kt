@@ -5,6 +5,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Person
@@ -18,7 +19,7 @@ import androidx.navigation.NavController
 
 sealed class BottomNavItem(val route: String, val title: String, val icon: ImageVector) {
     object Home : BottomNavItem("home", "Home", Icons.Filled.Home)
-    object MyTrips : BottomNavItem("my_trips", "My Trips", Icons.Filled.List)
+    object MyTrips : BottomNavItem("my_trips", "My Trips", Icons.AutoMirrored.Filled.List)
     object Profile : BottomNavItem("profile", "Profile", Icons.Filled.Person)
 }
 
