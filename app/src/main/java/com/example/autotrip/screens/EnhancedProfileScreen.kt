@@ -30,7 +30,7 @@ import com.example.autotrip.model.EnhancedUserProfile
 @Composable
 fun EnhancedProfileScreen(navController: NavController) {
 
-    // -------------------------------
+    // ----------------------------------
     // USER DATA
     // -----------------------------
     var user by remember {
