@@ -9,8 +9,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.*
@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -35,7 +36,8 @@ import kotlinx.coroutines.delay
 @Composable
 fun HomeScreen(navController: NavController, authViewModel: AuthViewModel? = null) {
 
-    val trips = remember {
+    // In Phase 2 this comes from TripsViewModel filtered to last 24 hours
+    val recentTrips = remember {
         listOf(
             Trip("1", "Home", "Work", "8:30 AM", "9:15 AM", "Car", "Work", 0, 0.0, "Auto-logged"),
             Trip("2", "Work", "Coffee Shop", "12:00 PM", "12:15 PM", "Walk", "Social", 2, 0.0, "Needs Info"),
@@ -47,25 +49,26 @@ fun HomeScreen(navController: NavController, authViewModel: AuthViewModel? = nul
         topBar = {
             AutoTripTopBar(
                 navController = navController,
-                currentRoute = "home",
-                title = "Home",
+                currentRoute  = "home",
+                title         = "Home",
                 authViewModel = authViewModel
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { navController.navigate("active_tracking") },
-                containerColor = MaterialTheme.colorScheme.primary
-            ) {
-                Icon(imageVector = Icons.Default.PlayArrow, contentDescription = "Start Tracking", tint = Color.White)
-            }
+            ExtendedFloatingActionButton(
+                onClick           = { navController.navigate("active_tracking") },
+                containerColor    = MaterialTheme.colorScheme.primary,
+                contentColor      = MaterialTheme.colorScheme.onPrimary,
+                icon              = { Icon(Icons.Default.Add, contentDescription = "New Trip") },
+                text              = { Text("New Trip", fontWeight = FontWeight.SemiBold) },
+                modifier          = Modifier
+            )
         },
         floatingActionButtonPosition = FabPosition.End,
         bottomBar = {
             BottomNavigationBar(navController = navController, currentRoute = "home")
         }
     ) { padding ->
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -73,11 +76,43 @@ fun HomeScreen(navController: NavController, authViewModel: AuthViewModel? = nul
                 .padding(horizontal = 16.dp)
         ) {
             Spacer(Modifier.height(16.dp))
+
             SummaryCard()
+
             Spacer(Modifier.height(24.dp))
-            Text("Recent Trips", style = MaterialTheme.typography.titleLarge, fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurface)
+
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    "Last 24 Hours",
+                    style      = MaterialTheme.typography.titleLarge,
+                    fontSize   = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "Tap to edit",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            Text(
+                "Trips below are editable for 24 hours, then confirmed automatically.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+            )
+
             Spacer(Modifier.height(12.dp))
-            AnimatedTripsList(trips = trips, onTripClick = { trip -> navController.navigate("trip_details/${trip.id}") })
+
+            AnimatedTripsList(
+                trips       = recentTrips,
+                onTripClick = { trip -> navController.navigate("trip_details/${trip.id}") }
+            )
         }
     }
 }
@@ -87,22 +122,24 @@ fun SummaryCard() {
     var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { visible = true }
 
-    val cardAlpha by animateFloatAsState(targetValue = if (visible) 1f else 0f, animationSpec = tween(650), label = "")
-    val offsetY by animateDpAsState(targetValue = if (visible) 0.dp else 16.dp, animationSpec = tween(650), label = "")
+    val cardAlpha by animateFloatAsState(targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(650), label = "")
+    val offsetY by animateDpAsState(targetValue = if (visible) 0.dp else 16.dp,
+        animationSpec = tween(650), label = "")
 
     Card(
-        modifier = Modifier.fillMaxWidth().offset(y = offsetY).alpha(cardAlpha),
+        modifier  = Modifier.fillMaxWidth().offset(y = offsetY).alpha(cardAlpha),
         elevation = CardDefaults.cardElevation(6.dp),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        shape     = RoundedCornerShape(20.dp),
+        colors    = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(modifier = Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Today's Summary", style = MaterialTheme.typography.titleLarge, fontSize = 22.sp, color = MaterialTheme.colorScheme.onSurface)
+            Text("Today's Summary", style = MaterialTheme.typography.titleLarge, fontSize = 20.sp)
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
-                SummaryItem(Icons.Default.Route, "Trips", "2")
-                SummaryItem(Icons.Default.DirectionsCar, "Distance", "15.3 km")
-                SummaryItem(Icons.Default.Timer, "Time", "48 min")
+                SummaryItem(Icons.Default.Route,        "Trips",    "3")
+                SummaryItem(Icons.Default.DirectionsCar,"Distance", "15.3 km")
+                SummaryItem(Icons.Default.Timer,        "Time",     "48 min")
             }
         }
     }
@@ -111,9 +148,10 @@ fun SummaryCard() {
 @Composable
 fun SummaryItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(26.dp))
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(26.dp))
         Spacer(Modifier.height(6.dp))
-        Text(value, style = MaterialTheme.typography.titleMedium, fontSize = 18.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+        Text(value, style = MaterialTheme.typography.titleMedium, fontSize = 18.sp, fontWeight = FontWeight.Bold)
         Text(label, fontSize = 12.sp, color = Color.Gray)
     }
 }
@@ -122,14 +160,16 @@ fun SummaryItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: St
 fun AnimatedTripsList(trips: List<Trip>, onTripClick: (Trip) -> Unit) {
     var listVisible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { listVisible = true }
+    val alpha by animateFloatAsState(targetValue = if (listVisible) 1f else 0f,
+        animationSpec = tween(500), label = "")
 
-    val alpha by animateFloatAsState(targetValue = if (listVisible) 1f else 0f, animationSpec = tween(500), label = "")
-
-    LazyColumn(modifier = Modifier.fillMaxSize().alpha(alpha), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(modifier = Modifier.fillMaxSize().alpha(alpha),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
         itemsIndexed(trips) { index, trip ->
             var itemVisible by remember { mutableStateOf(false) }
             LaunchedEffect(Unit) { delay(index * 120L); itemVisible = true }
-            AnimatedVisibility(visible = itemVisible, enter = fadeIn(tween(450)) + slideInVertically(tween(450))) {
+            AnimatedVisibility(visible = itemVisible,
+                enter = fadeIn(tween(450)) + slideInVertically(tween(450))) {
                 TripItemCard(trip = trip, onClick = { onTripClick(trip) })
             }
         }
@@ -140,23 +180,30 @@ fun AnimatedTripsList(trips: List<Trip>, onTripClick: (Trip) -> Unit) {
 fun TripItemCard(trip: Trip, onClick: () -> Unit) {
     val statusColor = when (trip.status) {
         "Auto-logged" -> Color(0xFF2E7D32)
-        "Needs Info" -> Color(0xFFFF8F00)
-        else -> Color.Gray
+        "Needs Info"  -> Color(0xFFFF8F00)
+        else          -> Color.Gray
     }
     Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        onClick   = onClick,
+        modifier  = Modifier.fillMaxWidth(),
+        shape     = RoundedCornerShape(16.dp),
+        colors    = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(4.dp)
     ) {
         Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("${trip.origin} → ${trip.destination}", fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                Text("${trip.origin} → ${trip.destination}",
+                    fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(4.dp))
                 Text("${trip.startTime} - ${trip.endTime}", fontSize = 13.sp, color = Color.Gray)
             }
-            Text(trip.status, color = statusColor, fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            Surface(shape = RoundedCornerShape(20.dp), color = statusColor.copy(alpha = 0.12f)) {
+                Text(trip.status,
+                    modifier   = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    color      = statusColor,
+                    fontSize   = 11.sp,
+                    fontWeight = FontWeight.Bold)
+            }
         }
     }
 }
