@@ -2,7 +2,6 @@ package com.example.autotrip.screens
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -18,14 +17,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
-import com.example.autotrip.components.AutoTripTopBar
 import com.example.autotrip.components.BottomNavigationBar
 import com.example.autotrip.ui.theme.AutoTripTheme
 import com.example.autotrip.model.EnhancedUserProfile
@@ -33,7 +30,7 @@ import com.example.autotrip.model.EnhancedUserProfile
 @Composable
 fun EnhancedProfileScreen(navController: NavController) {
 
-    // -----------------------------
+    // -------------------------------
     // USER DATA
     // -----------------------------
     var user by remember {
