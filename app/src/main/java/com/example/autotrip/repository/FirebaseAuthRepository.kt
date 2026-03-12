@@ -6,24 +6,17 @@ import kotlinx.coroutines.tasks.await
 
 /**
  * Handles all Firebase Authentication operations.
- * Returns Result<T> so the ViewModel can handle success/failure cleanly.
  */
 class FirebaseAuthRepository {
 
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
 
-    /** Currently logged-in user, or null if not authenticated */
     val currentUser: FirebaseUser?
         get() = auth.currentUser
 
-    /** Returns true if a user session already exists */
     val isLoggedIn: Boolean
         get() = auth.currentUser != null
 
-    /**
-     * Sign up with email and password.
-     * Returns the new FirebaseUser on success.
-     */
     suspend fun signUp(email: String, password: String): Result<FirebaseUser> {
         return try {
             val result = auth.createUserWithEmailAndPassword(email, password).await()
@@ -34,10 +27,6 @@ class FirebaseAuthRepository {
         }
     }
 
-    /**
-     * Sign in with email and password.
-     * Returns the FirebaseUser on success.
-     */
     suspend fun login(email: String, password: String): Result<FirebaseUser> {
         return try {
             val result = auth.signInWithEmailAndPassword(email, password).await()
@@ -49,8 +38,20 @@ class FirebaseAuthRepository {
     }
 
     /**
-     * Sign out the current user.
+     * Permanently deletes the Firebase Auth account.
+     * Note: Firebase may require recent sign-in before this succeeds.
+     * If it fails with "requires-recent-login", prompt the user to re-authenticate.
      */
+    suspend fun deleteAccount(): Result<Unit> {
+        return try {
+            auth.currentUser?.delete()?.await()
+                ?: return Result.failure(Exception("No user logged in"))
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     fun logout() {
         auth.signOut()
     }

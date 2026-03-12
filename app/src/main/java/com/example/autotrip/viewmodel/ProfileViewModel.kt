@@ -9,10 +9,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
-/**
- * Manages profile data for EnhancedProfileScreen.
- * Loads user data from Firestore on init and handles save updates.
- */
 class ProfileViewModel : ViewModel() {
 
     private val authRepo = FirebaseAuthRepository()
@@ -24,21 +20,19 @@ class ProfileViewModel : ViewModel() {
     private val _saveState = MutableStateFlow<SaveState>(SaveState.Idle)
     val saveState: StateFlow<SaveState> = _saveState
 
+    private val _deleteState = MutableStateFlow<DeleteState>(DeleteState.Idle)
+    val deleteState: StateFlow<DeleteState> = _deleteState
+
     init {
         loadProfile()
     }
 
-    /**
-     * Loads the user profile from Firestore.
-     * Called automatically when ViewModel is created.
-     */
     fun loadProfile() {
         val uid = authRepo.currentUser?.uid
         if (uid == null) {
             _profileState.value = ProfileUiState.Error("Not logged in")
             return
         }
-
         viewModelScope.launch {
             _profileState.value = ProfileUiState.Loading
             val result = userRepo.getUserProfile(uid)
@@ -50,26 +44,18 @@ class ProfileViewModel : ViewModel() {
         }
     }
 
-    /**
-     * Saves edited profile fields back to Firestore.
-     * Only updates the fields passed in — does not overwrite entire document.
-     *
-     * Usage: call with a map of only the changed fields, e.g.:
-     *   saveProfile(mapOf("fullName" to "New Name", "phoneNumber" to "+91..."))
-     */
     fun saveProfile(updates: Map<String, Any>) {
         val uid = authRepo.currentUser?.uid
         if (uid == null) {
             _saveState.value = SaveState.Error("Not logged in")
             return
         }
-
         viewModelScope.launch {
             _saveState.value = SaveState.Saving
             val result = userRepo.updateUserProfile(uid, updates)
             if (result.isSuccess) {
                 _saveState.value = SaveState.Saved
-                loadProfile() // Refresh profile data after save
+                loadProfile()
             } else {
                 _saveState.value = SaveState.Error(
                     result.exceptionOrNull()?.message ?: "Save failed"
@@ -78,9 +64,40 @@ class ProfileViewModel : ViewModel() {
         }
     }
 
-    fun resetSaveState() {
-        _saveState.value = SaveState.Idle
+    /**
+     * Permanently deletes the Firestore profile document AND
+     * the Firebase Auth account. After this the user must sign up again.
+     */
+    fun deleteAccount() {
+        val uid = authRepo.currentUser?.uid
+        if (uid == null) {
+            _deleteState.value = DeleteState.Error("Not logged in")
+            return
+        }
+        viewModelScope.launch {
+            _deleteState.value = DeleteState.Deleting
+            // 1. Delete Firestore document
+            val firestoreResult = userRepo.deleteUserProfile(uid)
+            if (firestoreResult.isFailure) {
+                _deleteState.value = DeleteState.Error(
+                    firestoreResult.exceptionOrNull()?.message ?: "Failed to delete profile data"
+                )
+                return@launch
+            }
+            // 2. Delete Firebase Auth account
+            val authResult = authRepo.deleteAccount()
+            _deleteState.value = if (authResult.isSuccess) {
+                DeleteState.Deleted
+            } else {
+                DeleteState.Error(
+                    authResult.exceptionOrNull()?.message ?: "Failed to delete account"
+                )
+            }
+        }
     }
+
+    fun resetSaveState() { _saveState.value = SaveState.Idle }
+    fun resetDeleteState() { _deleteState.value = DeleteState.Idle }
 }
 
 sealed class ProfileUiState {
@@ -94,4 +111,11 @@ sealed class SaveState {
     object Saving : SaveState()
     object Saved : SaveState()
     data class Error(val message: String) : SaveState()
+}
+
+sealed class DeleteState {
+    object Idle : DeleteState()
+    object Deleting : DeleteState()
+    object Deleted : DeleteState()
+    data class Error(val message: String) : DeleteState()
 }

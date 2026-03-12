@@ -7,6 +7,7 @@ import kotlinx.coroutines.tasks.await
 /**
  * Handles all Firestore operations related to the user profile.
  * Each user document lives at: users/{uid}
+ * Fields trimmed to only what NATPAC research requires.
  */
 class UserRepository {
 
@@ -30,27 +31,14 @@ class UserRepository {
                 "ageGroup" to "",
                 "gender" to "",
                 "occupation" to "",
-                "educationLevel" to "",
-                "householdIncome" to "",
                 "householdSize" to 1,
-                "numberOfChildren" to 0,
-                "numberOfWorkingAdults" to 1,
-                "residenceType" to "",
-                "residenceOwnership" to "",
-                "yearsAtCurrentResidence" to 0,
+                "numberOfVehicles" to 0,
                 "ownsPersonalVehicle" to false,
                 "vehicleType" to "",
-                "vehicleYear" to "",
-                "numberOfVehicles" to 0,
                 "hasDrivingLicense" to false,
-                "licenseYears" to 0,
                 "primaryCommuteMode" to "",
                 "workLocationType" to "",
-                "studyLocationType" to "",
-                "workFromHomeFrequency" to "",
-                "hasDisability" to false,
-                "disabilityType" to "",
-                "requiresSpecialTransport" to false,
+                "residenceType" to "",
                 "createdAt" to com.google.firebase.Timestamp.now()
             )
             usersCollection.document(uid).set(profileData).await()
@@ -62,7 +50,6 @@ class UserRepository {
 
     /**
      * Fetches the full user profile from Firestore.
-     * Maps Firestore document fields to EnhancedUserProfile model.
      */
     suspend fun getUserProfile(uid: String): Result<EnhancedUserProfile> {
         return try {
@@ -77,27 +64,14 @@ class UserRepository {
                 ageGroup = document.getString("ageGroup") ?: "",
                 gender = document.getString("gender") ?: "",
                 occupation = document.getString("occupation") ?: "",
-                educationLevel = document.getString("educationLevel") ?: "",
-                householdIncome = document.getString("householdIncome") ?: "",
                 householdSize = (document.getLong("householdSize") ?: 1L).toInt(),
-                numberOfChildren = (document.getLong("numberOfChildren") ?: 0L).toInt(),
-                numberOfWorkingAdults = (document.getLong("numberOfWorkingAdults") ?: 1L).toInt(),
-                residenceType = document.getString("residenceType") ?: "",
-                residenceOwnership = document.getString("residenceOwnership") ?: "",
-                yearsAtCurrentResidence = (document.getLong("yearsAtCurrentResidence") ?: 0L).toInt(),
+                numberOfVehicles = (document.getLong("numberOfVehicles") ?: 0L).toInt(),
                 ownsPersonalVehicle = document.getBoolean("ownsPersonalVehicle") ?: false,
                 vehicleType = document.getString("vehicleType") ?: "",
-                vehicleYear = document.getString("vehicleYear") ?: "",
-                numberOfVehicles = (document.getLong("numberOfVehicles") ?: 0L).toInt(),
                 hasDrivingLicense = document.getBoolean("hasDrivingLicense") ?: false,
-                licenseYears = (document.getLong("licenseYears") ?: 0L).toInt(),
                 primaryCommuteMode = document.getString("primaryCommuteMode") ?: "",
                 workLocationType = document.getString("workLocationType") ?: "",
-                studyLocationType = document.getString("studyLocationType") ?: "",
-                workFromHomeFrequency = document.getString("workFromHomeFrequency") ?: "",
-                hasDisability = document.getBoolean("hasDisability") ?: false,
-                disabilityType = document.getString("disabilityType") ?: "",
-                requiresSpecialTransport = document.getBoolean("requiresSpecialTransport") ?: false
+                residenceType = document.getString("residenceType") ?: "",
             )
             Result.success(profile)
         } catch (e: Exception) {
@@ -106,8 +80,7 @@ class UserRepository {
     }
 
     /**
-     * Updates only the fields the user can edit from the profile screen.
-     * Uses Firestore update() so only specified fields change — rest stay intact.
+     * Updates only the specified fields — does not overwrite the entire document.
      */
     suspend fun updateUserProfile(
         uid: String,
@@ -115,6 +88,19 @@ class UserRepository {
     ): Result<Unit> {
         return try {
             usersCollection.document(uid).update(updates).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Permanently deletes the user's Firestore profile document.
+     * Should be called alongside FirebaseAuth account deletion.
+     */
+    suspend fun deleteUserProfile(uid: String): Result<Unit> {
+        return try {
+            usersCollection.document(uid).delete().await()
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
