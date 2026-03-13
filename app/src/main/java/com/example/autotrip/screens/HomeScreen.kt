@@ -38,11 +38,10 @@ fun HomeScreen(
     navController : NavController,
     authViewModel : AuthViewModel? = null
 ) {
-    // Phase 3 — real data from Firestore via TripsViewModel
     val tripsVm: TripsViewModel = viewModel()
     val allTrips by tripsVm.trips.collectAsState()
 
-    // Filter to last 24 hours
+    // Filter to today only
     val todayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
     val today = todayFmt.format(Date())
     val recentTrips = remember(allTrips) {
@@ -80,7 +79,6 @@ fun HomeScreen(
         ) {
             Spacer(Modifier.height(16.dp))
 
-            // Real summary derived from today's trips
             SummaryCard(trips = recentTrips)
 
             Spacer(Modifier.height(24.dp))
@@ -90,39 +88,29 @@ fun HomeScreen(
                 verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    "Last 24 Hours",
-                    style      = MaterialTheme.typography.titleLarge,
-                    fontSize   = 20.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    "Tap to edit",
+                Text("Last 24 Hours",
+                    style = MaterialTheme.typography.titleLarge, fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold)
+                Text("Tap to edit",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
             }
 
             Spacer(Modifier.height(8.dp))
 
-            Text(
-                "Trips below are editable for 24 hours, then confirmed automatically.",
+            Text("Trips below are editable for 24 hours, then confirmed automatically.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-            )
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f))
 
             Spacer(Modifier.height(12.dp))
 
             if (recentTrips.isEmpty()) {
-                Box(
-                    modifier        = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Icon(Icons.Default.DirectionsCar, contentDescription = null,
                             modifier = Modifier.size(52.dp),
-                            tint     = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
                         Text("No trips today yet",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
@@ -142,7 +130,7 @@ fun HomeScreen(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SUMMARY CARD — computed from real trips
+// SUMMARY CARD
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -155,14 +143,13 @@ fun SummaryCard(trips: List<Trip> = emptyList()) {
     val offsetY by animateDpAsState(targetValue = if (visible) 0.dp else 16.dp,
         animationSpec = tween(650), label = "cardOffset")
 
-    // Compute stats
-    val tripCount = trips.size
-    // Distance: sum of all trips — Trip.cost can't be used; we show count-based placeholder
-    // until real distance is stored. For now show "—" if no GPS data yet.
-    //val totalDistanceKm = trips.sumOf { 0.0 } // placeholder — replace with trip.distanceKm when field added
-    //val distanceLabel = if (tripCount == 0) "—" else "—"   // kept as stub; see note below
-    val totalDistanceKm = trips.sumOf { it.distanceKm }
-    val distanceLabel = if (tripCount == 0) "—" else "%.1f km".format(totalDistanceKm)
+    val tripCount       = trips.size
+    val totalDistanceKm = trips.sumOf { it.distanceKm }  // ← FIXED: real distanceKm from model
+    val distanceLabel   = when {
+        tripCount == 0       -> "—"
+        totalDistanceKm <= 0 -> "—"
+        else                 -> "%.1f km".format(totalDistanceKm)
+    }
 
     Card(
         modifier  = Modifier.fillMaxWidth().offset(y = offsetY).alpha(cardAlpha),
@@ -174,9 +161,9 @@ fun SummaryCard(trips: List<Trip> = emptyList()) {
             Text("Today's Summary", style = MaterialTheme.typography.titleLarge, fontSize = 20.sp)
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
-                SummaryItem(Icons.Default.Route,        "Trips",    tripCount.toString())
-                SummaryItem(Icons.Default.DirectionsCar,"Distance", distanceLabel)
-                SummaryItem(Icons.Default.Pending,      "Pending",
+                SummaryItem(Icons.Default.Route,         "Trips",    tripCount.toString())
+                SummaryItem(Icons.Default.DirectionsCar, "Distance", distanceLabel)
+                SummaryItem(Icons.Default.Pending,       "Pending",
                     trips.count { it.status == "Needs Info" }.toString())
             }
         }
@@ -189,7 +176,8 @@ fun SummaryItem(icon: ImageVector, label: String, value: String) {
         Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(26.dp))
         Spacer(Modifier.height(6.dp))
-        Text(value, style = MaterialTheme.typography.titleMedium, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text(value, style = MaterialTheme.typography.titleMedium, fontSize = 18.sp,
+            fontWeight = FontWeight.Bold)
         Text(label, fontSize = 12.sp, color = Color.Gray)
     }
 }
@@ -239,16 +227,22 @@ fun TripItemCard(trip: Trip, onClick: () -> Unit) {
                 Text("${trip.origin} → ${trip.destination}",
                     fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(4.dp))
-                Text("${trip.startTime} - ${trip.endTime}", fontSize = 13.sp, color = Color.Gray)
+                Text("${trip.startTime} – ${trip.endTime}", fontSize = 13.sp, color = Color.Gray)
+                // Show distance if available
+                if (trip.distanceKm > 0) {
+                    Spacer(Modifier.height(2.dp))
+                    Text("%.2f km".format(trip.distanceKm),
+                        fontSize = 12.sp,
+                        color    = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f),
+                        fontWeight = FontWeight.Medium)
+                }
             }
             Surface(shape = RoundedCornerShape(20.dp), color = statusColor.copy(alpha = 0.12f)) {
-                Text(
-                    trip.status,
+                Text(trip.status,
                     modifier   = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                     color      = statusColor,
                     fontSize   = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                    fontWeight = FontWeight.Bold)
             }
         }
     }

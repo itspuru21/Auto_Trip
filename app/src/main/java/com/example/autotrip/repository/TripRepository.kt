@@ -10,17 +10,12 @@ import kotlinx.coroutines.tasks.await
 
 /**
  * Handles all Firestore operations for Trip documents.
- *
  * Document path: users/{uid}/trips/{tripId}
- *
- * All trips belong to a user — this ensures data isolation and
- * makes per-user queries fast and cheap.
  */
 class TripRepository {
 
     private val db = FirebaseFirestore.getInstance()
 
-    /** Returns the trips sub-collection for a given user. */
     private fun tripsRef(uid: String) =
         db.collection("users").document(uid).collection("trips")
 
@@ -28,19 +23,11 @@ class TripRepository {
     // READ
     // ─────────────────────────────────────────────────────────────
 
-    /**
-     * Real-time flow of all trips for the given user, ordered by date desc.
-     * The UI collects this; any Firestore write (including from simulation)
-     * immediately reflects in the UI without a manual refresh.
-     */
     fun getTripsFlow(uid: String): Flow<List<Trip>> = callbackFlow {
         val listener = tripsRef(uid)
             .orderBy("date", Query.Direction.DESCENDING)
             .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    close(error)
-                    return@addSnapshotListener
-                }
+                if (error != null) { close(error); return@addSnapshotListener }
                 val trips = snapshot?.documents?.mapNotNull { doc ->
                     runCatching { doc.toTrip() }.getOrNull()
                 } ?: emptyList()
@@ -49,9 +36,6 @@ class TripRepository {
         awaitClose { listener.remove() }
     }
 
-    /**
-     * One-shot fetch — useful for detail screens or refresh-on-demand.
-     */
     suspend fun getTripById(uid: String, tripId: String): Result<Trip> {
         return try {
             val doc = tripsRef(uid).document(tripId).get().await()
@@ -66,14 +50,10 @@ class TripRepository {
     // WRITE
     // ─────────────────────────────────────────────────────────────
 
-    /**
-     * Creates a new trip document.
-     * If [trip.id] is blank a Firestore-generated ID is used.
-     */
     suspend fun saveTrip(uid: String, trip: Trip): Result<String> {
         return try {
             val ref = if (trip.id.isBlank()) tripsRef(uid).document()
-                      else tripsRef(uid).document(trip.id)
+            else tripsRef(uid).document(trip.id)
             ref.set(trip.toMap()).await()
             Result.success(ref.id)
         } catch (e: Exception) {
@@ -81,10 +61,6 @@ class TripRepository {
         }
     }
 
-    /**
-     * Partial update — only the supplied fields are written.
-     * Used by TripDetailsScreen after the user fills in mode / purpose / cost.
-     */
     suspend fun updateTrip(uid: String, tripId: String, updates: Map<String, Any>): Result<Unit> {
         return try {
             tripsRef(uid).document(tripId).update(updates).await()
@@ -107,6 +83,7 @@ class TripRepository {
     // MAPPERS
     // ─────────────────────────────────────────────────────────────
 
+    @Suppress("UNCHECKED_CAST")
     private fun com.google.firebase.firestore.DocumentSnapshot.toTrip(): Trip =
         Trip(
             id          = id,
@@ -120,7 +97,8 @@ class TripRepository {
             cost        = getDouble("cost")        ?: 0.0,
             status      = getString("status")      ?: "",
             date        = getString("date")        ?: "",
-            distanceKm  = getDouble("distanceKm")  ?: 0.0
+            distanceKm  = getDouble("distanceKm")  ?: 0.0,
+            routePoints = (get("routePoints") as? List<String>) ?: emptyList()
         )
 
     private fun Trip.toMap(): Map<String, Any> = mapOf(
@@ -134,6 +112,7 @@ class TripRepository {
         "cost"        to cost,
         "status"      to status,
         "date"        to date,
-        "distanceKm"  to distanceKm
+        "distanceKm"  to distanceKm,
+        "routePoints" to routePoints
     )
 }

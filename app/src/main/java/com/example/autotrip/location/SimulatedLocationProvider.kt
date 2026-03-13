@@ -13,11 +13,8 @@ import kotlin.math.*
  * Interpolates a straight-line route between [origin] and [destination]
  * emitting fake [Location] objects at the average speed of [mode].
  *
- * Speed multiplier is fixed at 10x — a 20-minute car trip completes
+ * Speed multiplier is fixed at 10× — a 20-minute car trip completes
  * in ~2 minutes of real time during testing.
- *
- * Slight random noise (±0.000015°, ≈ ±1.5 m) is added to each fix
- * so distance accumulation in the ViewModel behaves realistically.
  */
 class SimulatedLocationProvider(
     private val origin      : SimPreset,
@@ -27,7 +24,6 @@ class SimulatedLocationProvider(
 
     companion object {
         private const val SPEED_MULTIPLIER = 10.0
-        /** Real-time interval between emitted location fixes (ms) */
         private const val TICK_MS          = 1_000L
         private const val NOISE_DEG        = 0.000015   // ≈ 1.5 m
     }
@@ -40,11 +36,12 @@ class SimulatedLocationProvider(
                 origin.lat, origin.lng, destination.lat, destination.lng
             )
 
-            // metres per simulated second = speed_kmh / 3.6 * multiplier
-            val speedMps = (mode.avgSpeedKmh / 3.6) * SPEED_MULTIPLIER
-
-            // How many real-time ticks to cover the route
+            // metres per real second (simulated at 10×)
+            val speedMps   = (mode.avgSpeedKmh / 3.6) * SPEED_MULTIPLIER
             val totalTicks = (totalDistanceM / speedMps).toInt().coerceAtLeast(2)
+
+            // Bearing from origin → destination (constant for straight-line route)
+            val bearing = bearingDeg(origin.lat, origin.lng, destination.lat, destination.lng)
 
             for (tick in 0..totalTicks) {
                 val fraction = (tick.toDouble() / totalTicks).coerceIn(0.0, 1.0)
@@ -53,25 +50,31 @@ class SimulatedLocationProvider(
                 val lng = lerp(origin.lng, destination.lng, fraction) + noise()
 
                 val loc = Location("simulation").apply {
-                    latitude         = lat
-                    longitude        = lng
-                    speed            = (speedMps / SPEED_MULTIPLIER).toFloat() // report actual speed
-                    accuracy         = 4f   // GPS-grade accuracy
-                    bearing          = 0f
-                    time             = System.currentTimeMillis()
+                    latitude             = lat
+                    longitude            = lng
+                    // Report real-world speed (not simulated speed) so the
+                    // ViewModel displays a realistic km/h value on screen.
+                    speed                = (speedMps / SPEED_MULTIPLIER).toFloat()
+                    // FIX: setting bearing causes hasSpeed() to return true on
+                    // synthetic Location objects — without this the ViewModel
+                    // ignores the speed field entirely.
+                    this.bearing         = bearing.toFloat()
+                    accuracy             = 4f
+                    time                 = System.currentTimeMillis()
                     elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
                 }
                 onLocation(loc)
-
                 if (tick < totalTicks) delay(TICK_MS)
             }
-            // Emit exact destination as final fix
+
+            // Final fix — exact destination, speed zero
             val finalLoc = Location("simulation").apply {
-                latitude  = destination.lat
-                longitude = destination.lng
-                speed     = 0f
-                accuracy  = 4f
-                time      = System.currentTimeMillis()
+                latitude             = destination.lat
+                longitude            = destination.lng
+                speed                = 0f
+                this.bearing         = bearing.toFloat()
+                accuracy             = 4f
+                time                 = System.currentTimeMillis()
                 elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
             }
             onLocation(finalLoc)
@@ -89,12 +92,24 @@ class SimulatedLocationProvider(
 
     private fun noise() = (Math.random() - 0.5) * 2 * NOISE_DEG
 
-    private fun haversineMetres(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    private fun haversineMetres(lat1: Double, lon1: Double,
+                                lat2: Double, lon2: Double): Double {
         val r    = 6_371_000.0
         val dLat = Math.toRadians(lat2 - lat1)
         val dLon = Math.toRadians(lon2 - lon1)
         val a    = sin(dLat / 2).pow(2) +
                 cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2).pow(2)
         return r * 2 * atan2(sqrt(a), sqrt(1 - a))
+    }
+
+    /** Initial bearing from point 1 → point 2 in degrees [0, 360). */
+    private fun bearingDeg(lat1: Double, lon1: Double,
+                           lat2: Double, lon2: Double): Double {
+        val dLon = Math.toRadians(lon2 - lon1)
+        val rlat1 = Math.toRadians(lat1)
+        val rlat2 = Math.toRadians(lat2)
+        val y = sin(dLon) * cos(rlat2)
+        val x = cos(rlat1) * sin(rlat2) - sin(rlat1) * cos(rlat2) * cos(dLon)
+        return (Math.toDegrees(atan2(y, x)) + 360) % 360
     }
 }

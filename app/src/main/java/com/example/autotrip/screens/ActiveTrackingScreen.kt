@@ -2,6 +2,7 @@ package com.example.autotrip.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Paint
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -20,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -27,6 +29,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
@@ -36,13 +39,19 @@ import com.example.autotrip.ui.theme.AutoTripTheme
 import com.example.autotrip.viewmodel.ActiveTrackingViewModel
 import com.example.autotrip.viewmodel.AuthViewModel
 import kotlinx.coroutines.delay
+import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polyline
 
 private enum class TrackingPhase { INPUT, TRACKING }
 
-/**
- * Entry point for normal (real GPS) tracking.
- * Navigated to via "active_tracking" route.
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// ENTRY POINTS
+// ─────────────────────────────────────────────────────────────────────────────
+
 @Composable
 fun ActiveTrackingScreen(
     navController : NavController,
@@ -58,10 +67,6 @@ fun ActiveTrackingScreen(
     )
 }
 
-/**
- * Entry point for simulation — navigated to via "active_tracking_sim/{origin}/{dest}".
- * The ViewModel already has [startSimulation] called by DevToolsScreen before nav.
- */
 @Composable
 fun ActiveTrackingSimScreen(
     navController : NavController,
@@ -91,13 +96,12 @@ private fun ActiveTrackingContent(
     simOrigin     : String?,
     simDest       : String?
 ) {
-    val context     = LocalContext.current
-    val isSimMode   = simOrigin != null
+    val context    = LocalContext.current
+    val isSimMode  = simOrigin != null
 
-    // If sim mode, start directly in TRACKING with pre-filled names
     var phase       by remember { mutableStateOf(if (isSimMode) TrackingPhase.TRACKING else TrackingPhase.INPUT) }
     var origin      by remember { mutableStateOf(simOrigin ?: "") }
-    var destination by remember { mutableStateOf(simDest   ?: "") }
+    var destination by remember { mutableStateOf(simDest ?: "") }
 
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -107,7 +111,9 @@ private fun ActiveTrackingContent(
         if (ok) { trackingVm.startTracking(context); phase = TrackingPhase.TRACKING }
     }
 
-    val saveState by trackingVm.saveState.collectAsState()
+    val saveState    by trackingVm.saveState.collectAsState()
+    val isSimulating by trackingVm.isSimulating.collectAsState()
+
     LaunchedEffect(saveState) {
         val s = saveState
         if (s is ActiveTrackingViewModel.SaveState.Saved) {
@@ -117,8 +123,6 @@ private fun ActiveTrackingContent(
             }
         }
     }
-
-    val isSimulating by trackingVm.isSimulating.collectAsState()
 
     Scaffold(
         topBar = {
@@ -133,46 +137,44 @@ private fun ActiveTrackingContent(
         AnimatedContent(
             targetState  = phase,
             transitionSpec = {
-                fadeIn(tween(350)) + slideInHorizontally(tween(350)) { it / 4 } togetherWith
-                        fadeOut(tween(250)) + slideOutHorizontally(tween(250)) { -it / 4 }
+                fadeIn(tween(350)) + slideInHorizontally(tween(350)) { it } togetherWith
+                        fadeOut(tween(200))
             },
-            label = "phaseContent"
+            label = "phaseTransition"
         ) { currentPhase ->
             when (currentPhase) {
-                TrackingPhase.INPUT -> {
-                    TripInputPhase(
-                        padding             = padding,
-                        origin              = origin,
-                        destination         = destination,
-                        onOriginChange      = { origin = it },
-                        onDestinationChange = { destination = it },
-                        onStartTracking     = {
-                            val fineOk = ContextCompat.checkSelfPermission(
-                                context, Manifest.permission.ACCESS_FINE_LOCATION
-                            ) == PackageManager.PERMISSION_GRANTED
-                            if (fineOk) {
-                                trackingVm.startTracking(context)
-                                phase = TrackingPhase.TRACKING
-                            } else {
-                                permLauncher.launch(arrayOf(
-                                    Manifest.permission.ACCESS_FINE_LOCATION,
-                                    Manifest.permission.ACCESS_COARSE_LOCATION
-                                ))
-                            }
+                TrackingPhase.INPUT -> InputPhase(
+                    padding            = padding,
+                    origin             = origin,
+                    destination        = destination,
+                    onOriginChange     = { origin = it },
+                    onDestinationChange = { destination = it },
+                    onStartTracking    = {
+                        val fine   = Manifest.permission.ACCESS_FINE_LOCATION
+                        val coarse = Manifest.permission.ACCESS_COARSE_LOCATION
+                        val hasPerms = ContextCompat.checkSelfPermission(context, fine) ==
+                                PackageManager.PERMISSION_GRANTED ||
+                                ContextCompat.checkSelfPermission(context, coarse) ==
+                                PackageManager.PERMISSION_GRANTED
+                        if (hasPerms) {
+                            trackingVm.startTracking(context)
+                            phase = TrackingPhase.TRACKING
+                        } else {
+                            permLauncher.launch(arrayOf(fine, coarse))
                         }
-                    )
-                }
-                TrackingPhase.TRACKING -> {
-                    ActiveTrackingPhase(
-                        padding      = padding,
-                        origin       = origin,
-                        destination  = destination,
-                        trackingVm   = trackingVm,
-                        saveState    = saveState,
-                        isSimulating = isSimulating,
-                        onEndTrip    = { secs -> trackingVm.stopTrackingAndSave(origin, destination, secs) }
-                    )
-                }
+                    }
+                )
+                TrackingPhase.TRACKING -> ActiveTrackingPhase(
+                    padding      = padding,
+                    origin       = origin,
+                    destination  = destination,
+                    trackingVm   = trackingVm,
+                    saveState    = saveState,
+                    isSimulating = isSimulating,
+                    onEndTrip    = { secs ->
+                        trackingVm.stopTrackingAndSave(origin, destination, secs)
+                    }
+                )
             }
         }
     }
@@ -183,7 +185,7 @@ private fun ActiveTrackingContent(
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun TripInputPhase(
+private fun InputPhase(
     padding             : PaddingValues,
     origin              : String,
     destination         : String,
@@ -195,10 +197,9 @@ private fun TripInputPhase(
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
-            .padding(horizontal = 20.dp)
+            .padding(horizontal = 20.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.Top
     ) {
-        Spacer(Modifier.height(24.dp))
-
         Text("Where are you going?",
             style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
@@ -232,10 +233,12 @@ private fun TripInputPhase(
                                 modifier = Modifier.size(20.dp)) {
                                 Icon(Icons.Default.Close, null, modifier = Modifier.size(16.dp)) }
                         },
-                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary)
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary)
                     )
                 }
-                Box(modifier = Modifier.padding(start = 17.dp, top = 4.dp, bottom = 4.dp)
+                Box(modifier = Modifier
+                    .padding(start = 17.dp, top = 4.dp, bottom = 4.dp)
                     .width(2.dp).height(20.dp)
                     .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)))
                 // Destination
@@ -260,7 +263,8 @@ private fun TripInputPhase(
                                 modifier = Modifier.size(20.dp)) {
                                 Icon(Icons.Default.Close, null, modifier = Modifier.size(16.dp)) }
                         },
-                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary)
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary)
                     )
                 }
             }
@@ -315,8 +319,9 @@ private fun ActiveTrackingPhase(
     isSimulating : Boolean,
     onEndTrip    : (Int) -> Unit
 ) {
-    val distanceKm by trackingVm.distanceKm.collectAsState()
-    val speedKmh   by trackingVm.speedKmh.collectAsState()
+    val distanceKm  by trackingVm.distanceKm.collectAsState()
+    val speedKmh    by trackingVm.speedKmh.collectAsState()
+    val routePoints by trackingVm.routePoints.collectAsState()
 
     var seconds by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) { while (true) { delay(1000); seconds++ } }
@@ -326,138 +331,188 @@ private fun ActiveTrackingPhase(
         if (h > 0) "%02d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
     }
 
-    val isSaving = saveState is ActiveTrackingViewModel.SaveState.Saving
-
-    val infiniteTransition = rememberInfiniteTransition(label = "trackPulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f, targetValue = 1.35f,
-        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "pulse"
+    val pulseAnim = rememberInfiniteTransition(label = "pulse")
+    val pulseScale by pulseAnim.animateFloat(
+        initialValue   = 1f, targetValue = 1.15f,
+        animationSpec  = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+        label = "pulseScale"
     )
 
-    val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(saveState) {
-        if (saveState is ActiveTrackingViewModel.SaveState.Error)
-            snackbarHostState.showSnackbar(saveState.message)
-    }
+    Column(
+        modifier                = Modifier.fillMaxSize().padding(padding),
+        horizontalAlignment     = Alignment.CenterHorizontally
+    ) {
+        // ── Live OSM map ─────────────────────────────────────────
+        LiveOsmMap(
+            routePoints = routePoints,
+            modifier    = Modifier
+                .fillMaxWidth()
+                .height(260.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .clip(RoundedCornerShape(20.dp))
+        )
 
-    Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { innerPadding ->
-        Column(
-            modifier = Modifier.fillMaxSize()
-                .padding(padding).padding(innerPadding).padding(horizontal = 20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Spacer(Modifier.height(16.dp))
-
-            // ── Simulation banner ─────────────────────────────────
-            AnimatedVisibility(visible = isSimulating) {
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = Color(0xFFFF6F00).copy(alpha = 0.12f),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(modifier = Modifier.padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Default.BugReport, null,
-                            tint = Color(0xFFFF6F00), modifier = Modifier.size(16.dp))
-                        Text("Simulation running at 10× speed",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = Color(0xFFFF6F00), fontWeight = FontWeight.SemiBold)
-                    }
-                }
+        // ── Pulse + status ───────────────────────────────────────
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(100.dp)) {
+            Box(modifier = Modifier
+                .size((80 * pulseScale).dp)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), CircleShape))
+            Box(modifier = Modifier.size(64.dp)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f), CircleShape))
+            Box(modifier = Modifier.size(44.dp)
+                .background(MaterialTheme.colorScheme.primary, CircleShape),
+                contentAlignment = Alignment.Center) {
+                Icon(
+                    if (isSimulating) Icons.Default.BugReport else Icons.Default.MyLocation,
+                    null,
+                    tint     = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(22.dp)
+                )
             }
-
-            Spacer(Modifier.height(if (isSimulating) 16.dp else 32.dp))
-
-            // Pulse indicator
-            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(100.dp)) {
-                Box(modifier = Modifier.size((80 * pulseScale).dp)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), CircleShape))
-                Box(modifier = Modifier.size(64.dp)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f), CircleShape))
-                Box(modifier = Modifier.size(44.dp)
-                    .background(MaterialTheme.colorScheme.primary, CircleShape),
-                    contentAlignment = Alignment.Center) {
-                    Icon(if (isSimulating) Icons.Default.BugReport else Icons.Default.MyLocation,
-                        null, tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(22.dp))
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            Text(if (isSimulating) "Simulation Active" else "Tracking Active",
-                style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(4.dp))
-            Text(if (isSimulating) "Simulated GPS at 10× speed" else "GPS is recording your route",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
-
-            Spacer(Modifier.height(28.dp))
-
-            // Route card
-            Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 2.dp, shadowElevation = 3.dp) {
-                Column(modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    RouteRow("From", origin.ifBlank { "Current Location" }, Color(0xFF2E7D32))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
-                    RouteRow("To",   destination.ifBlank { "Destination" },  Color(0xFFD32F2F))
-                }
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            // Live stats
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                LiveStatCard("Duration", timeLabel, Icons.Default.Timer)
-                LiveStatCard("Distance",
-                    if (distanceKm < 0.01) "— km" else "%.2f km".format(distanceKm),
-                    Icons.Default.Straighten)
-                LiveStatCard("Speed",
-                    if (speedKmh < 0.5) "— km/h" else "%.0f km/h".format(speedKmh),
-                    Icons.Default.Speed)
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            var pressed by remember { mutableStateOf(false) }
-            val btnScale by animateFloatAsState(
-                targetValue = if (pressed) 0.94f else 1f, animationSpec = tween(150), label = "btn")
-
-            Button(
-                onClick = { if (!isSaving) { pressed = true; onEndTrip(seconds) } },
-                enabled  = !isSaving,
-                modifier = Modifier.fillMaxWidth().height(56.dp).scale(btnScale),
-                shape    = RoundedCornerShape(16.dp),
-                colors   = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
-                elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
-            ) {
-                if (isSaving) {
-                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Saving…", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-                } else {
-                    Icon(Icons.Default.Stop, null, tint = Color.White, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("End Trip", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-                }
-            }
-            Spacer(Modifier.height(24.dp))
         }
+
+        Spacer(Modifier.height(12.dp))
+
+        Text(
+            if (isSimulating) "Simulation Active" else "Tracking Active",
+            style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (isSimulating) "Simulated GPS at 10× speed" else "GPS is recording your route",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+        )
+
+        Spacer(Modifier.height(20.dp))
+
+        // ── Route card ───────────────────────────────────────────
+        Surface(
+            modifier       = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            shape          = RoundedCornerShape(16.dp),
+            color          = MaterialTheme.colorScheme.surface,
+            tonalElevation = 2.dp, shadowElevation = 3.dp
+        ) {
+            Column(modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                RouteRow("From", origin.ifBlank { "Current Location" }, Color(0xFF2E7D32))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                RouteRow("To", destination.ifBlank { "Unknown" }, Color(0xFFD32F2F))
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // ── Stats row ────────────────────────────────────────────
+        Row(
+            modifier              = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            StatCard("Time",     timeLabel,                    Icons.Default.Timer,        Modifier.weight(1f))
+            StatCard("Distance", "%.2f km".format(distanceKm), Icons.Default.Route,        Modifier.weight(1f))
+            StatCard("Speed",    "%.1f km/h".format(speedKmh), Icons.Default.Speed,        Modifier.weight(1f))
+        }
+
+        Spacer(Modifier.weight(1f))
+
+        // ── Stop button ──────────────────────────────────────────
+        val isSaving = saveState is ActiveTrackingViewModel.SaveState.Saving
+        Button(
+            onClick   = { onEndTrip(seconds) },
+            enabled   = !isSaving,
+            modifier  = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .height(56.dp),
+            shape     = RoundedCornerShape(16.dp),
+            colors    = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.error),
+            elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
+        ) {
+            if (isSaving) {
+                CircularProgressIndicator(
+                    color    = MaterialTheme.colorScheme.onError,
+                    modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text("Saving…", color = MaterialTheme.colorScheme.onError,
+                    fontWeight = FontWeight.SemiBold)
+            } else {
+                Icon(Icons.Default.Stop, null,
+                    tint = MaterialTheme.colorScheme.onError, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("End Trip", color = MaterialTheme.colorScheme.onError,
+                    fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+            }
+        }
+        Spacer(Modifier.height(24.dp))
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SMALL COMPOSABLES
+// LIVE OSM MAP COMPOSABLE
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+fun LiveOsmMap(
+    routePoints : List<Pair<Double, Double>>,
+    modifier    : Modifier = Modifier
+) {
+    val context = LocalContext.current
+
+    // Keep a stable reference to the MapView and overlays across recompositions
+    val mapView = remember {
+        Configuration.getInstance().userAgentValue = context.packageName
+        MapView(context).apply {
+            setTileSource(TileSourceFactory.MAPNIK)
+            setMultiTouchControls(true)
+            controller.setZoom(15.0)
+        }
+    }
+
+    val polyline = remember { Polyline().apply { outlinePaint.strokeWidth = 8f } }
+    val marker   = remember { Marker(mapView) }
+
+    // Update polyline + marker whenever routePoints changes
+    LaunchedEffect(routePoints) {
+        if (routePoints.isEmpty()) return@LaunchedEffect
+
+        val geoPoints = routePoints.map { (lat, lng) -> GeoPoint(lat, lng) }
+        polyline.setPoints(geoPoints)
+        polyline.outlinePaint.color = android.graphics.Color.parseColor("#1565C0")
+
+        val last = geoPoints.last()
+        marker.position = last
+        marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+        marker.title = "Current Position"
+
+        if (!mapView.overlays.contains(polyline)) mapView.overlays.add(polyline)
+        if (!mapView.overlays.contains(marker))   mapView.overlays.add(marker)
+
+        mapView.controller.animateTo(last)
+        mapView.invalidate()
+    }
+
+    AndroidView(
+        factory  = { mapView },
+        modifier = modifier
+    )
+
+    // Lifecycle — pause/resume the tile download threads
+    DisposableEffect(Unit) {
+        mapView.onResume()
+        onDispose { mapView.onPause() }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SMALL HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun RouteRow(label: String, value: String, dotColor: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(dotColor))
+    Row(verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Box(modifier = Modifier.size(10.dp).background(dotColor, CircleShape))
         Column {
             Text(label, style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
@@ -467,13 +522,20 @@ private fun RouteRow(label: String, value: String, dotColor: Color) {
 }
 
 @Composable
-private fun LiveStatCard(label: String, value: String, icon: ImageVector) {
-    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp, shadowElevation = 2.dp) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+private fun StatCard(
+    label    : String,
+    value    : String,
+    icon     : ImageVector,
+    modifier : Modifier = Modifier
+) {
+    Surface(modifier = modifier, shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp, shadowElevation = 2.dp) {
+        Column(modifier = Modifier.padding(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Icon(icon, label, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp))
             Text(value, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             Text(label, style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
@@ -481,8 +543,12 @@ private fun LiveStatCard(label: String, value: String, icon: ImageVector) {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PREVIEW
+// ─────────────────────────────────────────────────────────────────────────────
+
 @Preview(showBackground = true, showSystemUi = true)
 @Composable
-fun PreviewActiveTracking() {
+fun PreviewActiveTrackingScreen() {
     AutoTripTheme { ActiveTrackingScreen(rememberNavController()) }
 }

@@ -20,9 +20,6 @@ import java.util.*
  *
  * Depends on [LocationProvider] — swap [RealLocationProvider] for
  * [SimulatedLocationProvider] during development without touching this class.
- *
- * Call [startTracking] with a real provider for production, or
- * call [startSimulation] from DevToolsScreen to inject a simulated provider.
  */
 class ActiveTrackingViewModel : ViewModel() {
 
@@ -39,6 +36,10 @@ class ActiveTrackingViewModel : ViewModel() {
 
     private val _isSimulating = MutableStateFlow(false)
     val isSimulating: StateFlow<Boolean> = _isSimulating
+
+    /** Live route breadcrumbs for the map polyline — emitted on every GPS fix. */
+    private val _routePoints = MutableStateFlow<List<Pair<Double, Double>>>(emptyList())
+    val routePoints: StateFlow<List<Pair<Double, Double>>> = _routePoints
 
     // ── Save state ───────────────────────────────────────────────
 
@@ -57,7 +58,7 @@ class ActiveTrackingViewModel : ViewModel() {
     private var provider     : LocationProvider? = null
     private var lastLocation : Location? = null
     private var totalDistM   = 0.0
-    private var startTimeMs  = 0L
+    private var startTimeMs  = 0L   // set in startWithProvider, cleared in resetState
 
     // ── Start — real GPS ─────────────────────────────────────────
 
@@ -77,24 +78,35 @@ class ActiveTrackingViewModel : ViewModel() {
 
     private fun startWithProvider(p: LocationProvider) {
         provider    = p
+        // FIX: capture start time HERE, after resetState() cleared it,
+        // so every trip gets its own correct start timestamp.
         startTimeMs = System.currentTimeMillis()
         p.startUpdates { loc -> onLocationReceived(loc) }
     }
 
     private fun onLocationReceived(loc: Location) {
+        // Accumulate distance — use 0.5 m threshold so even slow/simulated
+        // movement is captured without noise from GPS jitter.
         lastLocation?.let { prev ->
             val delta = prev.distanceTo(loc)
             if (delta > 0.5f) {
-                totalDistM += delta
-                _distanceKm.value = totalDistM / 1000.0
+                totalDistM        += delta
+                _distanceKm.value  = totalDistM / 1000.0
             }
         }
         lastLocation = loc
-        // Use speed from location if available, otherwise derive from distance delta
-        _speedKmh.value = when {
-            loc.hasSpeed() && loc.speed > 0f -> loc.speed * 3.6
-            else -> _speedKmh.value
+
+        // Speed — loc.speed is in m/s.  hasSpeed() returns true when the
+        // provider explicitly sets the speed field (real GPS and our simulator
+        // both do this).  Fall back to keeping the last known value.
+        if (loc.hasSpeed() && loc.speed >= 0f) {
+            _speedKmh.value = loc.speed * 3.6
         }
+
+        // Append breadcrumb for live map polyline
+        val current = _routePoints.value.toMutableList()
+        current.add(Pair(loc.latitude, loc.longitude))
+        _routePoints.value = current
     }
 
     // ── Stop & save ──────────────────────────────────────────────
@@ -115,10 +127,17 @@ class ActiveTrackingViewModel : ViewModel() {
         val timeFmt = SimpleDateFormat("h:mm a", Locale.getDefault())
         val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
 
+        // Convert route points to storable strings "lat,lng"
+        val routeStrings = _routePoints.value.map { (lat, lng) ->
+            "$lat,$lng"
+        }
+
         val trip = Trip(
             id          = "",
             origin      = origin,
             destination = destination,
+            // FIX: startTimeMs was captured at trip start, not at ViewModel init,
+            // so this is always the correct per-trip start time.
             startTime   = timeFmt.format(Date(startTimeMs)),
             endTime     = timeFmt.format(Date(now)),
             travelMode  = "",
@@ -127,7 +146,8 @@ class ActiveTrackingViewModel : ViewModel() {
             cost        = 0.0,
             status      = "Needs Info",
             date        = dateFmt.format(Date(now)),
-            distanceKm  = totalDistM / 1000.0
+            distanceKm  = totalDistM / 1000.0,
+            routePoints = routeStrings
         )
 
         viewModelScope.launch {
@@ -143,11 +163,13 @@ class ActiveTrackingViewModel : ViewModel() {
     // ── Cleanup ──────────────────────────────────────────────────
 
     private fun resetState() {
-        totalDistM   = 0.0
-        lastLocation = null
-        _distanceKm.value = 0.0
-        _speedKmh.value   = 0.0
-        _saveState.value  = SaveState.Idle
+        totalDistM    = 0.0
+        startTimeMs   = 0L          // FIX: also reset start time so old value never bleeds over
+        lastLocation  = null
+        _distanceKm.value   = 0.0
+        _speedKmh.value     = 0.0
+        _routePoints.value  = emptyList()
+        _saveState.value    = SaveState.Idle
     }
 
     override fun onCleared() {
