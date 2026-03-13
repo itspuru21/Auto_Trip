@@ -1,13 +1,12 @@
 package com.example.autotrip.screens
 
 import androidx.compose.animation.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -16,55 +15,35 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.autotrip.components.AutoTripTopBar
 import com.example.autotrip.simulation.SimMode
 import com.example.autotrip.simulation.SimPreset
-import com.example.autotrip.simulation.SimPresets
 import com.example.autotrip.ui.theme.AutoTripTheme
 import com.example.autotrip.viewmodel.AuthViewModel
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import java.net.URL
+import org.osmdroid.config.Configuration
+import org.osmdroid.events.MapEventsReceiver
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.MapEventsOverlay
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polyline
 import java.net.URLEncoder
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DATA
+// STATE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** A geocoding result from Nominatim */
-data class GeoResult(
-    val displayName : String,
-    val lat         : Double,
-    val lng         : Double
-)
-
-/** How a location was chosen — preset from the list, address search, or raw coords */
-sealed class LocationInput {
-    data class Preset(val simPreset: SimPreset) : LocationInput()
-    data class Geocoded(val result: GeoResult)  : LocationInput()
-    data class Manual(val lat: Double, val lng: Double) : LocationInput()
-
-    fun toSimPreset(fallbackName: String): SimPreset? = when (this) {
-        is Preset   -> simPreset
-        is Geocoded -> SimPreset(result.displayName.take(40), result.lat, result.lng)
-        is Manual   -> SimPreset(fallbackName, lat, lng)
-    }
-
-    fun displayLabel(): String = when (this) {
-        is Preset   -> simPreset.name
-        is Geocoded -> result.displayName.take(50)
-        is Manual   -> "%.5f, %.5f".format(lat, lng)
-    }
-}
+/** Which pin the next map-tap will place */
+private enum class PinMode { ORIGIN, DESTINATION, DONE }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SCREEN
@@ -75,16 +54,12 @@ fun DevToolsScreen(
     navController : NavController,
     authViewModel : AuthViewModel? = null
 ) {
-    var selectedMode  by remember { mutableStateOf(SimMode.CAR) }
-    var originInput   by remember { mutableStateOf<LocationInput>(LocationInput.Preset(SimPresets.DEFAULT_ORIGIN)) }
-    var destInput     by remember { mutableStateOf<LocationInput>(LocationInput.Preset(SimPresets.DEFAULT_DESTINATION)) }
-    var showOriginPicker by remember { mutableStateOf(false) }
-    var showDestPicker   by remember { mutableStateOf(false) }
+    var selectedMode by remember { mutableStateOf(SimMode.CAR) }
+    var originPoint  by remember { mutableStateOf<GeoPoint?>(null) }
+    var destPoint    by remember { mutableStateOf<GeoPoint?>(null) }
+    var pinMode      by remember { mutableStateOf(PinMode.ORIGIN) }
 
-    val resolvedOrigin = originInput.toSimPreset("Origin")
-    val resolvedDest   = destInput.toSimPreset("Destination")
-    val canLaunch = resolvedOrigin != null && resolvedDest != null &&
-            !(resolvedOrigin.lat == resolvedDest.lat && resolvedOrigin.lng == resolvedDest.lng)
+    val canLaunch = originPoint != null && destPoint != null
 
     Scaffold(
         topBar = {
@@ -100,496 +75,460 @@ fun DevToolsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
 
-            // ── Debug banner ──────────────────────────────────────
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = Color(0xFFFF6F00).copy(alpha = 0.12f)
+            // ── Step banner ───────────────────────────────────────
+            InstructionBanner(
+                pinMode = pinMode,
+                origin  = originPoint,
+                dest    = destPoint
+            )
+
+            // ── Map fills all remaining space ─────────────────────
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
             ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Icon(Icons.Default.BugReport, null,
-                        tint = Color(0xFFFF6F00), modifier = Modifier.size(20.dp))
-                    Text(
-                        "Debug only. Route follows real roads via OSRM at 10× speed.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFFF6F00)
+                MapPickerView(
+                    origin   = originPoint,
+                    dest     = destPoint,
+                    onTap    = { tappedPoint ->
+                        when (pinMode) {
+                            PinMode.ORIGIN -> {
+                                originPoint = tappedPoint
+                                pinMode     = PinMode.DESTINATION
+                            }
+                            PinMode.DESTINATION -> {
+                                destPoint = tappedPoint
+                                pinMode   = PinMode.DONE
+                            }
+                            PinMode.DONE -> { /* tapping again does nothing — use Reset */ }
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                // Crosshair hint while user is placing a pin
+                if (pinMode != PinMode.DONE) {
+                    Icon(
+                        Icons.Default.AddCircleOutline,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(36.dp),
+                        tint = if (pinMode == PinMode.ORIGIN)
+                            Color(0xFF2E7D32) else Color(0xFFD32F2F)
                     )
                 }
-            }
 
-            // ── Transport mode ────────────────────────────────────
-            DevSection("Transport Mode") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    SimMode.entries.forEach { mode ->
-                        val selected = mode == selectedMode
-                        Surface(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { selectedMode = mode }
-                                .border(
-                                    width = if (selected) 2.dp else 1.dp,
-                                    color = if (selected) Color(0xFFFF6F00)
-                                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                                    shape = RoundedCornerShape(10.dp)
-                                ),
-                            color = if (selected) Color(0xFFFF6F00).copy(alpha = 0.10f)
-                            else MaterialTheme.colorScheme.surface
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(vertical = 10.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Text(mode.emoji, fontSize = 18.sp)
-                                Text(
-                                    mode.label.split("-").first().split(" ").first(),
-                                    style      = MaterialTheme.typography.labelSmall,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-                                )
-                            }
-                        }
-                    }
-                }
-                Text(
-                    "Simulated at 10× · Effective: ${(selectedMode.avgSpeedKmh * 10).toInt()} km/h",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
-            }
-
-            // ── Origin ────────────────────────────────────────────
-            DevSection("Origin") {
-                LocationPicker(
-                    input        = originInput,
-                    label        = "Origin",
-                    onPickPreset = { showOriginPicker = true },
-                    onSelect     = { originInput = it }
-                )
-            }
-
-            // ── Destination ───────────────────────────────────────
-            DevSection("Destination") {
-                LocationPicker(
-                    input        = destInput,
-                    label        = "Destination",
-                    onPickPreset = { showDestPicker = true },
-                    onSelect     = { destInput = it }
-                )
-            }
-
-            // ── Route info ────────────────────────────────────────
-            if (resolvedOrigin != null && resolvedDest != null) {
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                // Reset FAB (top-right)
+                if (originPoint != null || destPoint != null) {
+                    SmallFloatingActionButton(
+                        onClick = {
+                            originPoint = null
+                            destPoint   = null
+                            pinMode     = PinMode.ORIGIN
+                        },
+                        modifier       = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(10.dp),
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor   = MaterialTheme.colorScheme.onErrorContainer
                     ) {
-                        Icon(Icons.Default.Info, null,
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.primary)
-                        Text(
-                            "Route follows real roads via OSRM. " +
-                                    "Falls back to straight-line if offline.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
+                        Icon(Icons.Default.Refresh, "Reset",
+                            modifier = Modifier.size(18.dp))
                     }
                 }
             }
 
-            // ── Launch ────────────────────────────────────────────
-            Button(
-                onClick = {
-                    val orig = resolvedOrigin ?: return@Button
-                    val dest = resolvedDest   ?: return@Button
+            // ── Bottom control panel ──────────────────────────────
+            BottomPanel(
+                selectedMode = selectedMode,
+                onModeSelect = { selectedMode = it },
+                origin       = originPoint,
+                dest         = destPoint,
+                canLaunch    = canLaunch,
+                onLaunch     = {
+                    val orig = originPoint ?: return@BottomPanel
+                    val dest = destPoint   ?: return@BottomPanel
+                    val origPreset = SimPreset(
+                        "Pin %.4f,%.4f".format(orig.latitude, orig.longitude),
+                        orig.latitude, orig.longitude
+                    )
+                    val destPreset = SimPreset(
+                        "Pin %.4f,%.4f".format(dest.latitude, dest.longitude),
+                        dest.latitude, dest.longitude
+                    )
                     navController.navigate(
                         "active_tracking_sim" +
-                                "/${URLEncoder.encode(orig.name, "UTF-8")}" +
-                                "/${orig.lat}/${orig.lng}" +
-                                "/${URLEncoder.encode(dest.name, "UTF-8")}" +
-                                "/${dest.lat}/${dest.lng}" +
+                                "/${URLEncoder.encode(origPreset.name, "UTF-8")}" +
+                                "/${origPreset.lat}/${origPreset.lng}" +
+                                "/${URLEncoder.encode(destPreset.name, "UTF-8")}" +
+                                "/${destPreset.lat}/${destPreset.lng}" +
                                 "/${selectedMode.name}"
                     )
-                },
-                enabled  = canLaunch,
-                modifier = Modifier.fillMaxWidth().height(56.dp),
-                shape    = RoundedCornerShape(16.dp),
-                colors   = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6F00))
-            ) {
-                Icon(Icons.Default.PlayArrow, null,
-                    tint = Color.White, modifier = Modifier.size(22.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Launch Simulation", color = Color.White,
-                    fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-            }
-
-            Spacer(Modifier.height(16.dp))
+                }
+            )
         }
-    }
-
-    if (showOriginPicker) {
-        PresetPickerDialog(
-            title     = "Select Origin",
-            onSelect  = { originInput = LocationInput.Preset(it); showOriginPicker = false },
-            onDismiss = { showOriginPicker = false }
-        )
-    }
-    if (showDestPicker) {
-        PresetPickerDialog(
-            title     = "Select Destination",
-            onSelect  = { destInput = LocationInput.Preset(it); showDestPicker = false },
-            onDismiss = { showDestPicker = false }
-        )
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LOCATION PICKER
-// Combines: preset button + address search + manual lat/lng
+// INSTRUCTION BANNER
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun LocationPicker(
-    input        : LocationInput,
-    label        : String,
-    onPickPreset : () -> Unit,
-    onSelect     : (LocationInput) -> Unit
+private fun InstructionBanner(
+    pinMode : PinMode,
+    origin  : GeoPoint?,
+    dest    : GeoPoint?
 ) {
-    // Which sub-mode is open
-    var mode by remember { mutableStateOf("preset") }  // "preset" | "search" | "manual"
-
-    // Search state
-    var searchQuery   by remember { mutableStateOf("") }
-    var searchResults by remember { mutableStateOf<List<GeoResult>>(emptyList()) }
-    var isSearching   by remember { mutableStateOf(false) }
-    var searchError   by remember { mutableStateOf<String?>(null) }
-
-    // Manual state
-    var manualLat by remember { mutableStateOf("") }
-    var manualLng by remember { mutableStateOf("") }
-
-    // Debounced Nominatim search
-    LaunchedEffect(searchQuery) {
-        if (searchQuery.length < 3) { searchResults = emptyList(); return@LaunchedEffect }
-        delay(600)   // debounce
-        isSearching = true
-        searchError = null
-        try {
-            val results = nominatimSearch(searchQuery)
-            searchResults = results
-            if (results.isEmpty()) searchError = "No results found"
-        } catch (e: Exception) {
-            searchError = "Search failed — check internet"
-            searchResults = emptyList()
-        }
-        isSearching = false
+    val bgColor = when (pinMode) {
+        PinMode.ORIGIN      -> Color(0xFF2E7D32).copy(alpha = 0.10f)
+        PinMode.DESTINATION -> Color(0xFFD32F2F).copy(alpha = 0.10f)
+        PinMode.DONE        -> Color(0xFFFF6F00).copy(alpha = 0.10f)
+    }
+    val icon = when (pinMode) {
+        PinMode.ORIGIN      -> Icons.Default.LocationOn
+        PinMode.DESTINATION -> Icons.Default.Flag
+        PinMode.DONE        -> Icons.Default.CheckCircle
+    }
+    val iconTint = when (pinMode) {
+        PinMode.ORIGIN      -> Color(0xFF2E7D32)
+        PinMode.DESTINATION -> Color(0xFFD32F2F)
+        PinMode.DONE        -> Color(0xFFFF6F00)
+    }
+    val message = when (pinMode) {
+        PinMode.ORIGIN      -> "Tap anywhere on the map to set your START point"
+        PinMode.DESTINATION -> "Now tap to set your END (destination) point"
+        PinMode.DONE        -> "Both pins set — choose transport mode and launch!"
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-
-        // ── Current selection chip ────────────────────────────────
-        Surface(
-            shape = RoundedCornerShape(10.dp),
-            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
-            modifier = Modifier.fillMaxWidth()
+    Surface(color = bgColor, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier              = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Row(
-                modifier = Modifier.padding(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(Icons.Default.Place, null,
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.primary)
-                Text(
-                    input.displayLabel(),
-                    style    = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 2
-                )
-            }
+            // Step 1 dot
+            StepDot(
+                number = 1,
+                done   = origin != null,
+                active = pinMode == PinMode.ORIGIN,
+                color  = Color(0xFF2E7D32)
+            )
+            // Step 2 dot
+            StepDot(
+                number = 2,
+                done   = dest != null,
+                active = pinMode == PinMode.DESTINATION,
+                color  = Color(0xFFD32F2F)
+            )
+
+            Spacer(Modifier.width(2.dp))
+
+            Icon(icon, null,
+                modifier = Modifier.size(18.dp),
+                tint     = iconTint)
+
+            Text(
+                message,
+                style      = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                modifier   = Modifier.weight(1f)
+            )
         }
+    }
+}
 
-        // ── Mode toggle row ───────────────────────────────────────
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ModeChip("Presets",  Icons.Default.List,      mode == "preset", { mode = "preset"  })
-            ModeChip("Search",   Icons.Default.Search,    mode == "search", { mode = "search"  })
-            ModeChip("Lat/Lng",  Icons.Default.PinDrop,   mode == "manual", { mode = "manual"  })
-        }
+@Composable
+private fun StepDot(
+    number : Int,
+    done   : Boolean,
+    active : Boolean,
+    color  : Color
+) {
+    val bg = when {
+        done   -> color
+        active -> color.copy(alpha = 0.18f)
+        else   -> Color.Gray.copy(alpha = 0.13f)
+    }
+    val border = if (active || done) color else Color.Gray.copy(alpha = 0.25f)
 
-        // ── Preset mode ───────────────────────────────────────────
-        AnimatedVisibility(visible = mode == "preset") {
-            OutlinedButton(
-                onClick  = onPickPreset,
-                modifier = Modifier.fillMaxWidth(),
-                shape    = RoundedCornerShape(10.dp)
-            ) {
-                Icon(Icons.Default.Place, null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Choose from preset locations", modifier = Modifier.weight(1f))
-                Icon(Icons.Default.ArrowDropDown, null, modifier = Modifier.size(18.dp))
-            }
-        }
-
-        // ── Search mode ───────────────────────────────────────────
-        AnimatedVisibility(visible = mode == "search") {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedTextField(
-                    value         = searchQuery,
-                    onValueChange = { searchQuery = it; searchResults = emptyList(); searchError = null },
-                    label         = { Text("Search address or place") },
-                    leadingIcon   = {
-                        if (isSearching)
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        else
-                            Icon(Icons.Default.Search, null)
-                    },
-                    trailingIcon  = if (searchQuery.isNotEmpty()) {{
-                        IconButton(onClick = { searchQuery = ""; searchResults = emptyList() }) {
-                            Icon(Icons.Default.Clear, null)
-                        }
-                    }} else null,
-                    modifier      = Modifier.fillMaxWidth(),
-                    singleLine    = true
-                )
-
-                // Error
-                searchError?.let {
-                    Text(it, style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(start = 4.dp))
-                }
-
-                // Results dropdown
-                if (searchResults.isNotEmpty()) {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        tonalElevation = 4.dp,
-                        shadowElevation = 4.dp,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column {
-                            searchResults.forEachIndexed { idx, result ->
-                                if (idx > 0) HorizontalDivider(
-                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
-                                )
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            onSelect(LocationInput.Geocoded(result))
-                                            searchQuery   = ""
-                                            searchResults = emptyList()
-                                            mode          = "preset"  // collapse back to chip view
-                                        }
-                                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    Icon(Icons.Default.LocationOn, null,
-                                        modifier = Modifier.size(18.dp),
-                                        tint = MaterialTheme.colorScheme.primary)
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            result.displayName,
-                                            style    = MaterialTheme.typography.bodySmall,
-                                            maxLines = 2
-                                        )
-                                        Text(
-                                            "%.5f, %.5f".format(result.lat, result.lng),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Hint
-                if (searchQuery.length in 1..2) {
-                    Text("Type at least 3 characters to search",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                        modifier = Modifier.padding(start = 4.dp))
-                }
-            }
-        }
-
-        // ── Manual lat/lng mode ───────────────────────────────────
-        AnimatedVisibility(visible = mode == "manual") {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value         = manualLat,
-                        onValueChange = { manualLat = it },
-                        label         = { Text("Latitude") },
-                        modifier      = Modifier.weight(1f),
-                        singleLine    = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                    )
-                    OutlinedTextField(
-                        value         = manualLng,
-                        onValueChange = { manualLng = it },
-                        label         = { Text("Longitude") },
-                        modifier      = Modifier.weight(1f),
-                        singleLine    = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                    )
-                }
-                val lat = manualLat.toDoubleOrNull()
-                val lng = manualLng.toDoubleOrNull()
-                OutlinedButton(
-                    onClick  = {
-                        if (lat != null && lng != null) {
-                            onSelect(LocationInput.Manual(lat, lng))
-                            mode = "preset"
-                        }
-                    },
-                    enabled  = lat != null && lng != null,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape    = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Use these coordinates")
-                }
-            }
+    Box(
+        modifier         = Modifier
+            .size(22.dp)
+            .background(bg, CircleShape)
+            .border(1.5.dp, border, CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        if (done) {
+            Icon(Icons.Default.Check, null,
+                modifier = Modifier.size(12.dp), tint = Color.White)
+        } else {
+            Text(
+                "$number",
+                style      = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color      = if (active) color else Color.Gray
+            )
         }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NOMINATIM GEOCODING
+// MAP PICKER  (OSMDroid — tap to place green/red pins)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Calls the free Nominatim API (OpenStreetMap geocoding).
- * No API key required. Returns up to 5 results.
- * Must be called from a coroutine — does network I/O on the calling dispatcher.
- */
-private suspend fun nominatimSearch(query: String): List<GeoResult> =
-    withContext(Dispatchers.IO) {
-        val encoded = URLEncoder.encode(query, "UTF-8")
-        val url     = "https://nominatim.openstreetmap.org/search" +
-                "?q=$encoded&format=json&limit=5&addressdetails=0"
+@Composable
+private fun MapPickerView(
+    origin   : GeoPoint?,
+    dest     : GeoPoint?,
+    onTap    : (GeoPoint) -> Unit,
+    modifier : Modifier = Modifier
+) {
+    val context = LocalContext.current
 
-        val json = URL(url).openConnection().apply {
-            // Nominatim requires a User-Agent header
-            setRequestProperty("User-Agent", "AutoTripApp/1.0")
-            connectTimeout = 8_000
-            readTimeout    = 8_000
-        }.getInputStream().bufferedReader().readText()
+    val mapView = remember {
+        Configuration.getInstance().userAgentValue = context.packageName
+        MapView(context).apply {
+            setTileSource(TileSourceFactory.MAPNIK)
+            setMultiTouchControls(true)
+            // Default centre: Chhatrapati Sambhajinagar (Aurangabad)
+            controller.setZoom(13.0)
+            controller.setCenter(GeoPoint(19.8762, 75.3433))
+        }
+    }
 
-        val array = JSONArray(json)
-        (0 until array.length()).map { i ->
-            val obj = array.getJSONObject(i)
-            GeoResult(
-                displayName = obj.getString("display_name"),
-                lat         = obj.getDouble("lat"),
-                lng         = obj.getDouble("lon")
+    // Stable marker objects — reused across recompositions
+    val originMarker = remember { Marker(mapView) }
+    val destMarker   = remember { Marker(mapView) }
+    val routeLine    = remember {
+        Polyline().apply {
+            outlinePaint.strokeWidth = 7f
+            outlinePaint.color       = android.graphics.Color.parseColor("#FF6F00")
+            outlinePaint.pathEffect  = android.graphics.DashPathEffect(
+                floatArrayOf(22f, 12f), 0f
             )
         }
     }
 
+    // Tap overlay — recreated only when callback reference changes
+    val tapOverlay = remember(onTap) {
+        MapEventsOverlay(object : MapEventsReceiver {
+            override fun singleTapConfirmedHelper(p: GeoPoint): Boolean {
+                onTap(p)
+                return true
+            }
+            override fun longPressHelper(p: GeoPoint) = false
+        })
+    }
+
+    // Sync overlays whenever pins change
+    LaunchedEffect(origin, dest, tapOverlay) {
+        mapView.overlays.clear()
+        mapView.overlays.add(tapOverlay)   // always first
+
+        origin?.let { pt ->
+            originMarker.apply {
+                position = pt
+                title    = "Start: %.5f, %.5f".format(pt.latitude, pt.longitude)
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                // Green tint
+                icon = context.getDrawable(org.osmdroid.library.R.drawable.marker_default)
+                    ?.apply { setTint(android.graphics.Color.parseColor("#2E7D32")) }
+            }
+            mapView.overlays.add(originMarker)
+        }
+
+        dest?.let { pt ->
+            destMarker.apply {
+                position = pt
+                title    = "End: %.5f, %.5f".format(pt.latitude, pt.longitude)
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                // Red tint
+                icon = context.getDrawable(org.osmdroid.library.R.drawable.marker_default)
+                    ?.apply { setTint(android.graphics.Color.parseColor("#D32F2F")) }
+            }
+            mapView.overlays.add(destMarker)
+        }
+
+        // Dashed line between both pins when both are placed
+        if (origin != null && dest != null) {
+            routeLine.setPoints(listOf(origin, dest))
+            mapView.overlays.add(routeLine)
+        }
+
+        mapView.invalidate()
+    }
+
+    AndroidView(factory = { mapView }, modifier = modifier)
+
+    DisposableEffect(Unit) {
+        mapView.onResume()
+        onDispose { mapView.onPause() }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// SMALL HELPERS
+// BOTTOM PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun ModeChip(
-    label    : String,
-    icon     : androidx.compose.ui.graphics.vector.ImageVector,
-    selected : Boolean,
-    onClick  : () -> Unit
+private fun BottomPanel(
+    selectedMode : SimMode,
+    onModeSelect : (SimMode) -> Unit,
+    origin       : GeoPoint?,
+    dest         : GeoPoint?,
+    canLaunch    : Boolean,
+    onLaunch     : () -> Unit
 ) {
     Surface(
-        modifier = Modifier
-            .clip(RoundedCornerShape(20.dp))
-            .clickable(onClick = onClick)
-            .border(
-                width = if (selected) 2.dp else 1.dp,
-                color = if (selected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                shape = RoundedCornerShape(20.dp)
-            ),
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer
-        else MaterialTheme.colorScheme.surface
+        tonalElevation  = 8.dp,
+        shadowElevation = 8.dp,
+        modifier        = Modifier.fillMaxWidth()
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        Column(
+            modifier            = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Icon(icon, null,
-                modifier = Modifier.size(14.dp),
-                tint = if (selected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(label,
-                style      = MaterialTheme.typography.labelSmall,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                color      = if (selected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant)
+
+            // ── Coordinate chips ──────────────────────────────────
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CoordChip(
+                    label    = "Start",
+                    point    = origin,
+                    color    = Color(0xFF2E7D32),
+                    modifier = Modifier.weight(1f)
+                )
+                CoordChip(
+                    label    = "End",
+                    point    = dest,
+                    color    = Color(0xFFD32F2F),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // ── Transport mode row ────────────────────────────────
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                SimMode.entries.forEach { mode ->
+                    val selected = mode == selectedMode
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { onModeSelect(mode) }
+                            .border(
+                                width = if (selected) 2.dp else 1.dp,
+                                color = if (selected) Color(0xFFFF6F00)
+                                else   MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                                shape = RoundedCornerShape(10.dp)
+                            ),
+                        color = if (selected) Color(0xFFFF6F00).copy(alpha = 0.10f)
+                        else   MaterialTheme.colorScheme.surface
+                    ) {
+                        Column(
+                            modifier            = Modifier.padding(vertical = 8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(mode.emoji, fontSize = 16.sp)
+                            Text(
+                                mode.label.split("-").first().split(" ").first(),
+                                style      = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                maxLines   = 1
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ── Launch button ─────────────────────────────────────
+            Button(
+                onClick  = onLaunch,
+                enabled  = canLaunch,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+                shape  = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6F00))
+            ) {
+                Icon(Icons.Default.PlayArrow, null,
+                    tint     = Color.White,
+                    modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (canLaunch) "Launch Simulation"
+                    else           "Tap map to set start & end",
+                    color      = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize   = 15.sp
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun DevSection(
-    title   : String,
-    content : @Composable ColumnScope.() -> Unit
+private fun CoordChip(
+    label    : String,
+    point    : GeoPoint?,
+    color    : Color,
+    modifier : Modifier = Modifier
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(title,
-            style      = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            color      = MaterialTheme.colorScheme.onSurfaceVariant)
-        content()
+    val isSet = point != null
+    Surface(
+        shape    = RoundedCornerShape(10.dp),
+        color    = if (isSet) color.copy(alpha = 0.09f)
+        else       MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        modifier = modifier.border(
+            width = 1.dp,
+            color = if (isSet) color.copy(alpha = 0.35f)
+            else       MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
+            shape = RoundedCornerShape(10.dp)
+        )
+    ) {
+        Row(
+            modifier              = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                if (isSet) Icons.Default.LocationOn else Icons.Default.RadioButtonUnchecked,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint     = if (isSet) color else Color.Gray
+            )
+            Column {
+                Text(
+                    label,
+                    style      = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color      = if (isSet) color else Color.Gray
+                )
+                Text(
+                    if (isSet) "%.4f, %.4f".format(point!!.latitude, point.longitude)
+                    else       "tap map to set",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isSet) MaterialTheme.colorScheme.onSurface
+                    else       Color.Gray.copy(alpha = 0.6f)
+                )
+            }
+        }
     }
 }
 
-@Composable
-private fun PresetPickerDialog(
-    title     : String,
-    onSelect  : (SimPreset) -> Unit,
-    onDismiss : () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title   = { Text(title) },
-        text    = {
-            Column {
-                SimPresets.ALL.forEach { preset ->
-                    TextButton(
-                        onClick  = { onSelect(preset) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(preset.name, modifier = Modifier.fillMaxWidth())
-                    }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// PREVIEW
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Preview(showBackground = true)
 @Composable
