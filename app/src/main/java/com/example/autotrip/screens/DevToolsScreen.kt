@@ -23,41 +23,32 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.autotrip.components.AutoTripTopBar
-import com.example.autotrip.location.SimulatedLocationProvider
 import com.example.autotrip.simulation.SimMode
 import com.example.autotrip.simulation.SimPreset
 import com.example.autotrip.simulation.SimPresets
 import com.example.autotrip.ui.theme.AutoTripTheme
-import com.example.autotrip.viewmodel.ActiveTrackingViewModel
 import com.example.autotrip.viewmodel.AuthViewModel
+import java.net.URLEncoder
 
 /**
- * Dev Tools — GPS Trip Simulator
+ * Dev Tools — GPS Trip Simulator configuration screen.
  *
- * Visible only in DEBUG builds. Accessible from the Profile screen.
- * Configures and launches a [SimulatedLocationProvider] into
- * [ActiveTrackingViewModel] so the tracking UI behaves as if the
- * user is actually on a trip — no need to go outside.
+ * IMPORTANT: This screen does NOT touch ActiveTrackingViewModel at all.
+ * It only builds the route parameters and navigates to ActiveTrackingSimScreen,
+ * which owns its own ViewModel instance and starts the simulation itself.
  *
- * Features:
- *  - Transport mode selector (Walk / Bike / Auto / Bus / Car / Metro)
- *  - Origin & Destination via built-in presets OR custom lat/lng
- *  - Speed info label showing effective simulated speed (10x)
- *  - "Launch Simulation" → navigates to ActiveTrackingScreen with sim running
+ * Previous bug: DevToolsScreen called viewModel() + startSimulation(), but
+ * ActiveTrackingSimScreen called viewModel() again → different instance →
+ * simulation ran in a ViewModel nobody was observing. Everything was blank.
  */
 @Composable
 fun DevToolsScreen(
     navController : NavController,
     authViewModel : AuthViewModel? = null
 ) {
-    // Shared ViewModel — same instance ActiveTrackingScreen will receive
-    val trackingVm: ActiveTrackingViewModel = viewModel()
-
-    // ── State ────────────────────────────────────────────────────
     var selectedMode by remember { mutableStateOf(SimMode.CAR) }
 
     var originPreset by remember { mutableStateOf(SimPresets.DEFAULT_ORIGIN) }
@@ -74,21 +65,20 @@ fun DevToolsScreen(
     val isCustomOrigin = originPreset.name == "Custom"
     val isCustomDest   = destPreset.name   == "Custom"
 
-    // Resolve final coords
-    val resolvedOrigin = if (isCustomOrigin) {
+    val resolvedOrigin: SimPreset? = if (isCustomOrigin) {
         val lat = originCustomLat.toDoubleOrNull()
         val lng = originCustomLng.toDoubleOrNull()
         if (lat != null && lng != null) SimPreset("Custom Origin", lat, lng) else null
     } else originPreset
 
-    val resolvedDest = if (isCustomDest) {
+    val resolvedDest: SimPreset? = if (isCustomDest) {
         val lat = destCustomLat.toDoubleOrNull()
         val lng = destCustomLng.toDoubleOrNull()
         if (lat != null && lng != null) SimPreset("Custom Dest", lat, lng) else null
     } else destPreset
 
     val canLaunch = resolvedOrigin != null && resolvedDest != null &&
-            resolvedOrigin.lat != resolvedDest.lat
+            !(resolvedOrigin.lat == resolvedDest.lat && resolvedOrigin.lng == resolvedDest.lng)
 
     Scaffold(
         topBar = {
@@ -108,149 +98,145 @@ fun DevToolsScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-
             // ── Debug banner ─────────────────────────────────────
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = Color(0xFFFF6F00).copy(alpha = 0.12f)
             ) {
                 Row(
-                    modifier          = Modifier.padding(12.dp),
+                    modifier = Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(Icons.Default.BugReport, contentDescription = null,
-                        tint     = Color(0xFFFF6F00),
-                        modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.BugReport, null,
+                        tint = Color(0xFFFF6F00), modifier = Modifier.size(20.dp))
                     Text(
                         "Debug only — not visible in release builds.\n" +
-                        "Simulation runs at 10× speed.",
+                                "Simulation fetches a real road route, then plays it at 10× speed.",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFFFF6F00)
                     )
                 }
             }
 
-            // ── Mode selector ────────────────────────────────────
-            DevSection(title = "Transport Mode") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Row 1: Walk, Bicycle, Auto
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()) {
-                        SimMode.entries.take(3).forEach { mode ->
-                            ModeChip(
-                                mode       = mode,
-                                isSelected = selectedMode == mode,
-                                onClick    = { selectedMode = mode },
-                                modifier   = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                    // Row 2: Bus, Car, Metro
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()) {
-                        SimMode.entries.drop(3).forEach { mode ->
-                            ModeChip(
-                                mode       = mode,
-                                isSelected = selectedMode == mode,
-                                onClick    = { selectedMode = mode },
-                                modifier   = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                    // Speed info
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
+            // ── Transport mode ────────────────────────────────────
+            DevSection("Transport Mode") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SimMode.entries.forEach { mode ->
+                        val selected = mode == selectedMode
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { selectedMode = mode }
+                                .border(
+                                    width = if (selected) 2.dp else 1.dp,
+                                    color = if (selected) Color(0xFFFF6F00)
+                                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                    shape = RoundedCornerShape(10.dp)
+                                ),
+                            color = if (selected) Color(0xFFFF6F00).copy(alpha = 0.10f)
+                            else MaterialTheme.colorScheme.surface
                         ) {
-                            Text("Avg speed", style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("${selectedMode.avgSpeedKmh} km/h  →  sim @ " +
-                                    "${selectedMode.avgSpeedKmh * 10} km/h (10×)",
-                                style      = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color      = MaterialTheme.colorScheme.primary)
+                            Column(
+                                modifier = Modifier.padding(vertical = 10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(mode.emoji, fontSize = 18.sp)
+                                Text(
+                                    mode.label.split("-").first().split(" ").first(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
                         }
                     }
                 }
-            }
-
-            // ── Origin ───────────────────────────────────────────
-            DevSection(title = "Origin") {
-                PresetDropdownButton(
-                    selected  = originPreset,
-                    onClick   = { showOriginPicker = true }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Simulated at 10× · Effective: ${(selectedMode.avgSpeedKmh * 10).toInt()} km/h",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )
-                AnimatedVisibility(isCustomOrigin) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.padding(top = 8.dp)) {
-                        LatLngField("Latitude",  originCustomLat)  { originCustomLat = it }
-                        LatLngField("Longitude", originCustomLng)  { originCustomLng = it }
-                    }
-                }
             }
 
-            // ── Destination ──────────────────────────────────────
-            DevSection(title = "Destination") {
-                PresetDropdownButton(
-                    selected = destPreset,
-                    onClick  = { showDestPicker = true }
+            // ── Origin ────────────────────────────────────────────
+            DevSection("Origin") {
+                CoordRow(
+                    preset       = originPreset,
+                    customLat    = originCustomLat,
+                    customLng    = originCustomLng,
+                    onPickClick  = { showOriginPicker = true },
+                    onLatChange  = { originCustomLat = it },
+                    onLngChange  = { originCustomLng = it }
                 )
-                AnimatedVisibility(isCustomDest) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.padding(top = 8.dp)) {
-                        LatLngField("Latitude",  destCustomLat)  { destCustomLat = it }
-                        LatLngField("Longitude", destCustomLng)  { destCustomLng = it }
-                    }
-                }
             }
 
-            // ── Summary ──────────────────────────────────────────
+            // ── Destination ───────────────────────────────────────
+            DevSection("Destination") {
+                CoordRow(
+                    preset       = destPreset,
+                    customLat    = destCustomLat,
+                    customLng    = destCustomLng,
+                    onPickClick  = { showDestPicker = true },
+                    onLatChange  = { destCustomLat = it },
+                    onLngChange  = { destCustomLng = it }
+                )
+            }
+
+            // ── Route info ────────────────────────────────────────
             if (resolvedOrigin != null && resolvedDest != null) {
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
                 ) {
-                    Column(modifier = Modifier.padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        SimSummaryRow("From", resolvedOrigin.name)
-                        SimSummaryRow("To",   resolvedDest.name)
-                        SimSummaryRow("Mode", "${selectedMode.emoji} ${selectedMode.label}")
-                        SimSummaryRow("Speed", "${selectedMode.avgSpeedKmh} km/h (10× sim)")
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Info, null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary)
+                        Text(
+                            "Route will follow real roads via OSRM. " +
+                                    "Falls back to straight-line if offline.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
                     }
                 }
             }
 
-            // ── Launch button ────────────────────────────────────
+            // ── Launch button ─────────────────────────────────────
             Button(
                 onClick = {
                     val orig = resolvedOrigin ?: return@Button
                     val dest = resolvedDest   ?: return@Button
-                    val simProvider = SimulatedLocationProvider(
-                        origin      = orig,
-                        destination = dest,
-                        mode        = selectedMode
-                    )
-                    trackingVm.startSimulation(simProvider)
-                    // Navigate to tracking screen — it will detect isSimulating = true
+
+                    // Pass everything via nav args — ActiveTrackingSimScreen
+                    // creates its OWN ViewModel and starts the simulation.
+                    // This is the correct pattern: one screen = one ViewModel.
                     navController.navigate(
-                        "active_tracking_sim/${orig.name}/${dest.name}"
+                        "active_tracking_sim" +
+                                "/${URLEncoder.encode(orig.name, "UTF-8")}" +
+                                "/${orig.lat}/${orig.lng}" +
+                                "/${URLEncoder.encode(dest.name, "UTF-8")}" +
+                                "/${dest.lat}/${dest.lng}" +
+                                "/${selectedMode.name}"
                     )
                 },
                 enabled  = canLaunch,
                 modifier = Modifier.fillMaxWidth().height(56.dp),
                 shape    = RoundedCornerShape(16.dp),
-                colors   = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFFF6F00)
-                )
+                colors   = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6F00))
             ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null,
-                    tint     = Color.White,
-                    modifier = Modifier.size(22.dp))
+                Icon(Icons.Default.PlayArrow, null,
+                    tint = Color.White, modifier = Modifier.size(22.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Launch Simulation", color = Color.White,
                     fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
@@ -260,18 +246,17 @@ fun DevToolsScreen(
         }
     }
 
-    // ── Preset pickers ───────────────────────────────────────────
     if (showOriginPicker) {
         PresetPickerDialog(
-            title    = "Select Origin",
-            onSelect = { originPreset = it; showOriginPicker = false },
+            title     = "Select Origin",
+            onSelect  = { originPreset = it; showOriginPicker = false },
             onDismiss = { showOriginPicker = false }
         )
     }
     if (showDestPicker) {
         PresetPickerDialog(
-            title    = "Select Destination",
-            onSelect = { destPreset = it; showDestPicker = false },
+            title     = "Select Destination",
+            onSelect  = { destPreset = it; showDestPicker = false },
             onDismiss = { showDestPicker = false }
         )
     }
@@ -286,82 +271,58 @@ private fun DevSection(
     title   : String,
     content : @Composable ColumnScope.() -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
         content()
     }
 }
 
 @Composable
-private fun ModeChip(
-    mode       : SimMode,
-    isSelected : Boolean,
-    onClick    : () -> Unit,
-    modifier   : Modifier = Modifier
+private fun CoordRow(
+    preset      : SimPreset,
+    customLat   : String,
+    customLng   : String,
+    onPickClick : () -> Unit,
+    onLatChange : (String) -> Unit,
+    onLngChange : (String) -> Unit
 ) {
-    val bg     = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface
-    val fg     = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-    val border = if (isSelected) Color.Transparent else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(bg)
-            .border(1.dp, border, RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Text(mode.emoji, fontSize = 20.sp)
-        Text(
-            mode.label.split("-").first(),   // "Auto" from "Auto-Rickshaw"
-            style      = MaterialTheme.typography.labelSmall,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-            color      = fg
-        )
-    }
-}
-
-@Composable
-private fun PresetDropdownButton(selected: SimPreset, onClick: () -> Unit) {
+    val isCustom = preset.name == "Custom"
     OutlinedButton(
-        onClick  = onClick,
+        onClick  = onPickClick,
         modifier = Modifier.fillMaxWidth(),
-        shape    = RoundedCornerShape(12.dp)
+        shape    = RoundedCornerShape(10.dp)
     ) {
-        Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(selected.name, modifier = Modifier.weight(1f))
-        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+        Icon(Icons.Default.Place, null, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(if (isCustom) "Custom coordinates" else preset.name,
+            modifier = Modifier.weight(1f))
+        Icon(Icons.Default.ArrowDropDown, null, modifier = Modifier.size(18.dp))
+    }
+    AnimatedVisibility(visible = isCustom) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value         = customLat,
+                onValueChange = onLatChange,
+                label         = { Text("Latitude") },
+                modifier      = Modifier.weight(1f),
+                singleLine    = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+            )
+            OutlinedTextField(
+                value         = customLng,
+                onValueChange = onLngChange,
+                label         = { Text("Longitude") },
+                modifier      = Modifier.weight(1f),
+                singleLine    = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+            )
+        }
     }
 }
 
-@Composable
-private fun LatLngField(label: String, value: String, onValueChange: (String) -> Unit) {
-    OutlinedTextField(
-        value         = value,
-        onValueChange = onValueChange,
-        label         = { Text(label) },
-        modifier      = Modifier.fillMaxWidth(),
-        singleLine    = true,
-        shape         = RoundedCornerShape(12.dp),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        placeholder   = { Text(if (label == "Latitude") "e.g. 19.8762" else "e.g. 75.3433",
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)) }
-    )
-}
-
-@Composable
-private fun SimSummaryRow(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f))
-        Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PresetPickerDialog(
     title     : String,
@@ -370,38 +331,16 @@ private fun PresetPickerDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title, fontWeight = FontWeight.Bold) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        title   = { Text(title) },
+        text    = {
+            Column {
                 SimPresets.ALL.forEach { preset ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { onSelect(preset) }
-                            .padding(vertical = 10.dp, horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    TextButton(
+                        onClick  = { onSelect(preset) },
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(
-                            if (preset.name == "Custom") Icons.Default.EditLocation
-                            else Icons.Default.Place,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                            tint     = MaterialTheme.colorScheme.primary
-                        )
-                        Column {
-                            Text(preset.name, style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium)
-                            if (preset.name != "Custom") {
-                                Text("%.4f, %.4f".format(preset.lat, preset.lng),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
-                            }
-                        }
+                        Text(preset.name, modifier = Modifier.fillMaxWidth())
                     }
-                    if (preset != SimPresets.ALL.last())
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
                 }
             }
         },
@@ -412,8 +351,8 @@ private fun PresetPickerDialog(
     )
 }
 
-@Preview(showBackground = true, showSystemUi = true)
+@Preview(showBackground = true)
 @Composable
-fun PreviewDevTools() {
+fun PreviewDevToolsScreen() {
     AutoTripTheme { DevToolsScreen(rememberNavController()) }
 }

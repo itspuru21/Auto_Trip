@@ -10,6 +10,7 @@ import com.example.autotrip.BuildConfig
 import com.example.autotrip.screens.*
 import com.example.autotrip.viewmodel.AuthViewModel
 import com.example.autotrip.viewmodel.TripsViewModel
+import java.net.URLDecoder
 
 fun NavGraphBuilder.appNavGraph(
     navController : NavHostController,
@@ -46,9 +47,7 @@ fun NavGraphBuilder.appNavGraph(
         )
     }
 
-    composable("home") {
-        HomeScreen(navController, authViewModel)
-    }
+    composable("home") { HomeScreen(navController, authViewModel) }
 
     composable("my_trips") {
         val tripsViewModel: TripsViewModel = viewModel()
@@ -59,44 +58,52 @@ fun NavGraphBuilder.appNavGraph(
         )
     }
 
-    composable("profile") {
-        EnhancedProfileScreen(navController)
-    }
+    composable("profile") { EnhancedProfileScreen(navController) }
 
-    // ── Real GPS tracking ────────────────────────────────────────
+    // Real GPS tracking
     composable("active_tracking") {
         ActiveTrackingScreen(navController, authViewModel)
     }
 
-    // ── Simulated GPS tracking (dev only) ────────────────────────
-    // Route: active_tracking_sim/{origin}/{dest}
-    // origin and dest are display names passed from DevToolsScreen.
+    // Simulated GPS tracking — all route params passed as path segments
+    // DevToolsScreen URL-encodes the name strings; decoded here
     composable(
-        route     = "active_tracking_sim/{origin}/{dest}",
+        route = "active_tracking_sim/{originName}/{originLat}/{originLng}/{destName}/{destLat}/{destLng}/{mode}",
         arguments = listOf(
-            navArgument("origin") { type = NavType.StringType },
-            navArgument("dest")   { type = NavType.StringType }
+            navArgument("originName") { type = NavType.StringType },
+            navArgument("originLat")  { type = NavType.StringType },
+            navArgument("originLng")  { type = NavType.StringType },
+            navArgument("destName")   { type = NavType.StringType },
+            navArgument("destLat")    { type = NavType.StringType },
+            navArgument("destLng")    { type = NavType.StringType },
+            navArgument("mode")       { type = NavType.StringType }
         )
-    ) { backStack ->
-        val origin = backStack.arguments?.getString("origin").orEmpty()
-        val dest   = backStack.arguments?.getString("dest").orEmpty()
+    ) { backStackEntry ->
+        val args = backStackEntry.arguments!!
         ActiveTrackingSimScreen(
             navController = navController,
             authViewModel = authViewModel,
-            simOrigin     = origin,
-            simDest       = dest
+            originName    = URLDecoder.decode(args.getString("originName")!!, "UTF-8"),
+            originLat     = args.getString("originLat")!!.toDouble(),
+            originLng     = args.getString("originLng")!!.toDouble(),
+            destName      = URLDecoder.decode(args.getString("destName")!!, "UTF-8"),
+            destLat       = args.getString("destLat")!!.toDouble(),
+            destLng       = args.getString("destLng")!!.toDouble(),
+            modeName      = args.getString("mode")!!
         )
     }
 
-    composable("notifications") {
-        NotificationScreen(navController, authViewModel)
+    composable("dev_tools") {
+        if (BuildConfig.DEBUG) {
+            DevToolsScreen(navController, authViewModel)
+        }
     }
 
     composable(
         route     = "trip_details/{tripId}",
         arguments = listOf(navArgument("tripId") { type = NavType.StringType })
-    ) { backStackEntry ->
-        val tripId         = backStackEntry.arguments?.getString("tripId").orEmpty()
+    ) { backStack ->
+        val tripId         = backStack.arguments?.getString("tripId") ?: return@composable
         val tripsViewModel : TripsViewModel = viewModel()
         TripDetailsScreen(
             navController  = navController,
@@ -104,12 +111,5 @@ fun NavGraphBuilder.appNavGraph(
             authViewModel  = authViewModel,
             tripsViewModel = tripsViewModel
         )
-    }
-
-    // ── Dev Tools — only registered in debug builds ───────────────
-    if (BuildConfig.DEBUG) {
-        composable("dev_tools") {
-            DevToolsScreen(navController, authViewModel)
-        }
     }
 }

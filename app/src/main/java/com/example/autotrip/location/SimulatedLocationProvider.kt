@@ -5,16 +5,16 @@ import android.os.SystemClock
 import com.example.autotrip.simulation.SimMode
 import com.example.autotrip.simulation.SimPreset
 import kotlinx.coroutines.*
+import org.json.JSONObject
+import java.net.URL
 import kotlin.math.*
 
 /**
- * Development-only simulated GPS provider.
+ * Simulates GPS movement along a REAL road route fetched from OSRM.
+ * Falls back to straight-line interpolation if OSRM is unreachable.
  *
- * Interpolates a straight-line route between [origin] and [destination]
- * emitting fake [Location] objects at the average speed of [mode].
- *
- * Speed multiplier is fixed at 10× — a 20-minute car trip completes
- * in ~2 minutes of real time during testing.
+ * Self-contained coroutine scope — never leaks into any ViewModel.
+ * All callbacks are dispatched on Main so StateFlow updates are safe.
  */
 class SimulatedLocationProvider(
     private val origin      : SimPreset,
@@ -24,76 +24,133 @@ class SimulatedLocationProvider(
 
     companion object {
         private const val SPEED_MULTIPLIER = 10.0
-        private const val TICK_MS          = 1_000L
-        private const val NOISE_DEG        = 0.000015   // ≈ 1.5 m
+        private const val TICK_MS          = 500L   // 2 fixes/sec → smooth polyline
+        private const val WAYPOINT_SPACING = 10.0   // metres between densified points
+        private const val OSRM_BASE =
+            "https://router.project-osrm.org/route/v1/driving"
     }
 
-    private var job: Job? = null
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     override fun startUpdates(onLocation: (Location) -> Unit) {
-        job = CoroutineScope(Dispatchers.Main).launch {
-            val totalDistanceM = haversineMetres(
-                origin.lat, origin.lng, destination.lat, destination.lng
-            )
+        scope.launch {
+            val waypoints = fetchOsrmRoute() ?: buildStraightLine()
+            emitWaypoints(waypoints, onLocation)
+        }
+    }
 
-            // metres per real second (simulated at 10×)
-            val speedMps   = (mode.avgSpeedKmh / 3.6) * SPEED_MULTIPLIER
-            val totalTicks = (totalDistanceM / speedMps).toInt().coerceAtLeast(2)
+    override fun stopUpdates() { scope.cancel() }
 
-            // Bearing from origin → destination (constant for straight-line route)
-            val bearing = bearingDeg(origin.lat, origin.lng, destination.lat, destination.lng)
+    // ── OSRM real road route ──────────────────────────────────────
 
-            for (tick in 0..totalTicks) {
-                val fraction = (tick.toDouble() / totalTicks).coerceIn(0.0, 1.0)
+    private fun fetchOsrmRoute(): List<Pair<Double, Double>>? {
+        return try {
+            val url = "$OSRM_BASE/${origin.lng},${origin.lat};" +
+                    "${destination.lng},${destination.lat}" +
+                    "?overview=full&geometries=geojson&steps=false"
 
-                val lat = lerp(origin.lat, destination.lat, fraction) + noise()
-                val lng = lerp(origin.lng, destination.lng, fraction) + noise()
+            val json = URL(url).readText(Charsets.UTF_8)
+            val root = JSONObject(json)
+            if (root.getString("code") != "Ok") return null
 
-                val loc = Location("simulation").apply {
-                    latitude             = lat
-                    longitude            = lng
-                    // Report real-world speed (not simulated speed) so the
-                    // ViewModel displays a realistic km/h value on screen.
-                    speed                = (speedMps / SPEED_MULTIPLIER).toFloat()
-                    // FIX: setting bearing causes hasSpeed() to return true on
-                    // synthetic Location objects — without this the ViewModel
-                    // ignores the speed field entirely.
-                    this.bearing         = bearing.toFloat()
-                    accuracy             = 4f
-                    time                 = System.currentTimeMillis()
-                    elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
-                }
-                onLocation(loc)
-                if (tick < totalTicks) delay(TICK_MS)
+            val coords = root
+                .getJSONArray("routes").getJSONObject(0)
+                .getJSONObject("geometry")
+                .getJSONArray("coordinates")   // each entry: [lng, lat]
+
+            val raw = (0 until coords.length()).map { i ->
+                val pt = coords.getJSONArray(i)
+                Pair(pt.getDouble(1), pt.getDouble(0))  // → (lat, lng)
             }
 
-            // Final fix — exact destination, speed zero
-            val finalLoc = Location("simulation").apply {
-                latitude             = destination.lat
-                longitude            = destination.lng
-                speed                = 0f
+            densify(raw, WAYPOINT_SPACING)
+        } catch (_: Exception) { null }
+    }
+
+    /** Insert evenly-spaced intermediate points so every tick is ~10 m. */
+    private fun densify(
+        points     : List<Pair<Double, Double>>,
+        stepMetres : Double
+    ): List<Pair<Double, Double>> {
+        if (points.size < 2) return points
+        val out = mutableListOf(points.first())
+        for (i in 1 until points.size) {
+            val (lat1, lng1) = points[i - 1]
+            val (lat2, lng2) = points[i]
+            val dist  = haversineM(lat1, lng1, lat2, lng2)
+            val steps = (dist / stepMetres).toInt()
+            for (s in 1..steps) {
+                val t = s.toDouble() / (steps + 1)
+                out.add(Pair(lerp(lat1, lat2, t), lerp(lng1, lng2, t)))
+            }
+            out.add(points[i])
+        }
+        return out
+    }
+
+    // ── Straight-line fallback ────────────────────────────────────
+
+    private fun buildStraightLine(): List<Pair<Double, Double>> {
+        val dist  = haversineM(origin.lat, origin.lng, destination.lat, destination.lng)
+        val steps = (dist / WAYPOINT_SPACING).toInt().coerceAtLeast(50)
+        return (0..steps).map { i ->
+            val t = i.toDouble() / steps
+            Pair(lerp(origin.lat, destination.lat, t), lerp(origin.lng, destination.lng, t))
+        }
+    }
+
+    // ── Emit loop ─────────────────────────────────────────────────
+
+    private suspend fun emitWaypoints(
+        waypoints  : List<Pair<Double, Double>>,
+        onLocation : (Location) -> Unit
+    ) {
+        val realSpeedMps = mode.avgSpeedKmh / 3.6
+        val simSpeedMps  = realSpeedMps * SPEED_MULTIPLIER
+        val tickSec      = TICK_MS / 1000.0
+        // Each waypoint ≈ WAYPOINT_SPACING metres apart
+        val step = ((simSpeedMps * tickSec) / WAYPOINT_SPACING).toInt().coerceAtLeast(1)
+
+        var idx = 0
+        while (idx < waypoints.size && scope.isActive) {
+            val (lat, lng) = waypoints[idx]
+            val nextIdx    = (idx + 1).coerceAtMost(waypoints.size - 1)
+            val bearing    = if (nextIdx != idx)
+                bearingDeg(lat, lng, waypoints[nextIdx].first, waypoints[nextIdx].second)
+            else 0.0
+
+            val loc = Location("simulation").apply {
+                latitude             = lat
+                longitude            = lng
+                speed                = realSpeedMps.toFloat()
                 this.bearing         = bearing.toFloat()
                 accuracy             = 4f
                 time                 = System.currentTimeMillis()
                 elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
             }
-            onLocation(finalLoc)
+            withContext(Dispatchers.Main) { onLocation(loc) }
+            delay(TICK_MS)
+            idx += step
         }
+
+        // Final fix at exact destination
+        val finalLoc = Location("simulation").apply {
+            latitude             = destination.lat
+            longitude            = destination.lng
+            speed                = 0f
+            accuracy             = 4f
+            time                 = System.currentTimeMillis()
+            elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+        }
+        withContext(Dispatchers.Main) { onLocation(finalLoc) }
     }
 
-    override fun stopUpdates() {
-        job?.cancel()
-        job = null
-    }
-
-    // ── Math helpers ─────────────────────────────────────────────
+    // ── Geometry helpers ─────────────────────────────────────────
 
     private fun lerp(a: Double, b: Double, t: Double) = a + (b - a) * t
 
-    private fun noise() = (Math.random() - 0.5) * 2 * NOISE_DEG
-
-    private fun haversineMetres(lat1: Double, lon1: Double,
-                                lat2: Double, lon2: Double): Double {
+    private fun haversineM(lat1: Double, lon1: Double,
+                           lat2: Double, lon2: Double): Double {
         val r    = 6_371_000.0
         val dLat = Math.toRadians(lat2 - lat1)
         val dLon = Math.toRadians(lon2 - lon1)
@@ -102,14 +159,13 @@ class SimulatedLocationProvider(
         return r * 2 * atan2(sqrt(a), sqrt(1 - a))
     }
 
-    /** Initial bearing from point 1 → point 2 in degrees [0, 360). */
     private fun bearingDeg(lat1: Double, lon1: Double,
                            lat2: Double, lon2: Double): Double {
-        val dLon = Math.toRadians(lon2 - lon1)
-        val rlat1 = Math.toRadians(lat1)
-        val rlat2 = Math.toRadians(lat2)
-        val y = sin(dLon) * cos(rlat2)
-        val x = cos(rlat1) * sin(rlat2) - sin(rlat1) * cos(rlat2) * cos(dLon)
+        val dLon  = Math.toRadians(lon2 - lon1)
+        val φ1    = Math.toRadians(lat1)
+        val φ2    = Math.toRadians(lat2)
+        val y     = sin(dLon) * cos(φ2)
+        val x     = cos(φ1) * sin(φ2) - sin(φ1) * cos(φ2) * cos(dLon)
         return (Math.toDegrees(atan2(y, x)) + 360) % 360
     }
 }
