@@ -66,9 +66,12 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 
-    implementation("org.osmdroid:osmdroid-android:6.1.20")
-    implementation("org.osmdroid:osmdroid-wms:6.1.20")
+
+
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
+    // OpenStreetMap — no API key needed
+    implementation(libs.osmdroid.android)
+    implementation(libs.osmdroid.wms)
 
     // Firebase
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
