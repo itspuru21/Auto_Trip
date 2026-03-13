@@ -33,6 +33,16 @@ import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.*
 
+// ─────────────────────────────────────────────────────────────────────────────
+// "Today" = from 12:00 AM to 11:59:59 PM of the current calendar day
+// ─────────────────────────────────────────────────────────────────────────────
+
+private fun isTodayTrip(trip: Trip): Boolean {
+    val todayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+    val today    = todayFmt.format(Date())
+    return trip.date == today
+}
+
 @Composable
 fun HomeScreen(
     navController : NavController,
@@ -41,12 +51,8 @@ fun HomeScreen(
     val tripsVm: TripsViewModel = viewModel()
     val allTrips by tripsVm.trips.collectAsState()
 
-    // Filter to today only
-    val todayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-    val today = todayFmt.format(Date())
-    val recentTrips = remember(allTrips) {
-        allTrips.filter { it.date == today }
-    }
+    // Today 12AM–12AM filter
+    val todayTrips = remember(allTrips) { allTrips.filter { isTodayTrip(it) } }
 
     Scaffold(
         topBar = {
@@ -79,7 +85,7 @@ fun HomeScreen(
         ) {
             Spacer(Modifier.height(16.dp))
 
-            SummaryCard(trips = recentTrips)
+            SummaryCard(trips = todayTrips)
 
             Spacer(Modifier.height(24.dp))
 
@@ -88,7 +94,7 @@ fun HomeScreen(
                 verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("Last 24 Hours",
+                Text("Today's Trips",
                     style = MaterialTheme.typography.titleLarge, fontSize = 20.sp,
                     fontWeight = FontWeight.Bold)
                 Text("Tap to edit",
@@ -98,13 +104,13 @@ fun HomeScreen(
 
             Spacer(Modifier.height(8.dp))
 
-            Text("Trips below are editable for 24 hours, then confirmed automatically.",
+            Text("Trips are editable today, confirmed at midnight.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f))
 
             Spacer(Modifier.height(12.dp))
 
-            if (recentTrips.isEmpty()) {
+            if (todayTrips.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -120,9 +126,11 @@ fun HomeScreen(
                     }
                 }
             } else {
+                // Proper scrollable list with weight so FAB doesn't overlap
                 AnimatedTripsList(
-                    trips       = recentTrips,
-                    onTripClick = { trip -> navController.navigate("trip_details/${trip.id}") }
+                    trips       = todayTrips,
+                    onTripClick = { trip -> navController.navigate("trip_details/${trip.id}") },
+                    modifier    = Modifier.weight(1f)
                 )
             }
         }
@@ -130,7 +138,7 @@ fun HomeScreen(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SUMMARY CARD
+// SUMMARY CARD — Trips | Distance | Time  (no "Pending")
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -143,12 +151,24 @@ fun SummaryCard(trips: List<Trip> = emptyList()) {
     val offsetY by animateDpAsState(targetValue = if (visible) 0.dp else 16.dp,
         animationSpec = tween(650), label = "cardOffset")
 
-    val tripCount       = trips.size
-    val totalDistanceKm = trips.sumOf { it.distanceKm }  // ← FIXED: real distanceKm from model
-    val distanceLabel   = when {
-        tripCount == 0       -> "—"
+    val tripCount        = trips.size
+    val totalDistanceKm  = trips.sumOf { it.distanceKm }
+    val totalDurationSec = trips.sumOf { it.durationSecs }
+
+    val distanceLabel = when {
+        tripCount == 0      -> "—"
         totalDistanceKm <= 0 -> "—"
         else                 -> "%.1f km".format(totalDistanceKm)
+    }
+
+    val timeLabel = when {
+        tripCount == 0        -> "—"
+        totalDurationSec <= 0 -> "—"
+        else -> {
+            val h = totalDurationSec / 3600
+            val m = (totalDurationSec % 3600) / 60
+            if (h > 0) "${h}h ${m}m" else "${m}m"
+        }
     }
 
     Card(
@@ -163,8 +183,7 @@ fun SummaryCard(trips: List<Trip> = emptyList()) {
             Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
                 SummaryItem(Icons.Default.Route,         "Trips",    tripCount.toString())
                 SummaryItem(Icons.Default.DirectionsCar, "Distance", distanceLabel)
-                SummaryItem(Icons.Default.Pending,       "Pending",
-                    trips.count { it.status == "Needs Info" }.toString())
+                SummaryItem(Icons.Default.Timer,         "Time",     timeLabel)
             }
         }
     }
@@ -183,19 +202,24 @@ fun SummaryItem(icon: ImageVector, label: String, value: String) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRIPS LIST (animated)
+// TRIPS LIST — animated, properly scrollable
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-fun AnimatedTripsList(trips: List<Trip>, onTripClick: (Trip) -> Unit) {
+fun AnimatedTripsList(
+    trips       : List<Trip>,
+    onTripClick : (Trip) -> Unit,
+    modifier    : Modifier = Modifier
+) {
     var listVisible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { listVisible = true }
     val alpha by animateFloatAsState(targetValue = if (listVisible) 1f else 0f,
         animationSpec = tween(500), label = "listAlpha")
 
     LazyColumn(
-        modifier            = Modifier.fillMaxSize().alpha(alpha),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        modifier            = modifier.alpha(alpha),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding      = PaddingValues(bottom = 88.dp) // space for FAB
     ) {
         itemsIndexed(trips) { index, trip ->
             var itemVisible by remember { mutableStateOf(false) }
@@ -228,7 +252,6 @@ fun TripItemCard(trip: Trip, onClick: () -> Unit) {
                     fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(4.dp))
                 Text("${trip.startTime} – ${trip.endTime}", fontSize = 13.sp, color = Color.Gray)
-                // Show distance if available
                 if (trip.distanceKm > 0) {
                     Spacer(Modifier.height(2.dp))
                     Text("%.2f km".format(trip.distanceKm),
@@ -240,9 +263,7 @@ fun TripItemCard(trip: Trip, onClick: () -> Unit) {
             Surface(shape = RoundedCornerShape(20.dp), color = statusColor.copy(alpha = 0.12f)) {
                 Text(trip.status,
                     modifier   = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                    color      = statusColor,
-                    fontSize   = 11.sp,
-                    fontWeight = FontWeight.Bold)
+                    color      = statusColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
         }
     }

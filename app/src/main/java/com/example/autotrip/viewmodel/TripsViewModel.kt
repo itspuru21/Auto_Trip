@@ -40,14 +40,14 @@ class TripsViewModel : ViewModel() {
         val uid = authRepo.currentUser?.uid ?: return
         viewModelScope.launch {
             tripRepo.deleteTrip(uid, tripId)
-            // The Firestore snapshot listener in getTripsFlow() will automatically
-            // remove this trip from the StateFlow — no manual refresh needed.
+            // Firestore snapshot listener auto-updates the StateFlow
         }
     }
 
     fun resetSaveState() { _saveState.value = TripSaveState.Idle }
 }
 
+// Kept as top-level so TripDetailsScreen can import it directly
 sealed class TripSaveState {
     object Idle    : TripSaveState()
     object Saving  : TripSaveState()

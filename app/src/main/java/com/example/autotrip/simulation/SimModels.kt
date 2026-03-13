@@ -9,8 +9,9 @@ enum class SimMode(
     BICYCLE("Bicycle",      15.0,  "🚲"),
     AUTO   ("Auto-Rickshaw",20.0,  "🛺"),
     BUS    ("Bus",          25.0,  "🚌"),
-    CAR    ("Car",          40.0,  "🚗"),
-    METRO  ("Metro",        60.0,  "🚇")
+    CAR    ("Car",          40.0,  "🚗")
+    // Metro removed — not in scope for current build.
+    // Keep this file clean; re-add if NATPAC requires it.
 }
 
 data class SimPreset(

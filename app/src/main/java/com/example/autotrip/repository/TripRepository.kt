@@ -2,16 +2,11 @@ package com.example.autotrip.repository
 
 import com.example.autotrip.model.Trip
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.Query
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 
-/**
- * Handles all Firestore operations for Trip documents.
- * Document path: users/{uid}/trips/{tripId}
- */
 class TripRepository {
 
     private val db = FirebaseFirestore.getInstance()
@@ -25,10 +20,9 @@ class TripRepository {
 
     fun getTripsFlow(uid: String): Flow<List<Trip>> = callbackFlow {
         val listener = tripsRef(uid)
-            .orderBy("date", Query.Direction.DESCENDING)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) { close(error); return@addSnapshotListener }
-                val trips = snapshot?.documents?.mapNotNull { doc ->
+            .orderBy("startTime")
+            .addSnapshotListener { snap, _ ->
+                val trips = snap?.documents?.mapNotNull { doc ->
                     runCatching { doc.toTrip() }.getOrNull()
                 } ?: emptyList()
                 trySend(trips)
@@ -86,33 +80,35 @@ class TripRepository {
     @Suppress("UNCHECKED_CAST")
     private fun com.google.firebase.firestore.DocumentSnapshot.toTrip(): Trip =
         Trip(
-            id          = id,
-            origin      = getString("origin")      ?: "",
-            destination = getString("destination") ?: "",
-            startTime   = getString("startTime")   ?: "",
-            endTime     = getString("endTime")     ?: "",
-            travelMode  = getString("travelMode")  ?: "",
-            purpose     = getString("purpose")     ?: "",
-            companions  = (getLong("companions")   ?: 0L).toInt(),
-            cost        = getDouble("cost")        ?: 0.0,
-            status      = getString("status")      ?: "",
-            date        = getString("date")        ?: "",
-            distanceKm  = getDouble("distanceKm")  ?: 0.0,
-            routePoints = (get("routePoints") as? List<String>) ?: emptyList()
+            id           = id,
+            origin       = getString("origin")      ?: "",
+            destination  = getString("destination") ?: "",
+            startTime    = getString("startTime")   ?: "",
+            endTime      = getString("endTime")     ?: "",
+            travelMode   = getString("travelMode")  ?: "",
+            purpose      = getString("purpose")     ?: "",
+            companions   = (getLong("companions")   ?: 0L).toInt(),
+            cost         = getDouble("cost")        ?: 0.0,
+            status       = getString("status")      ?: "",
+            date         = getString("date")        ?: "",
+            distanceKm   = getDouble("distanceKm")  ?: 0.0,
+            durationSecs = (getLong("durationSecs") ?: 0L).toInt(),
+            routePoints  = (get("routePoints") as? List<String>) ?: emptyList()
         )
 
     private fun Trip.toMap(): Map<String, Any> = mapOf(
-        "origin"      to origin,
-        "destination" to destination,
-        "startTime"   to startTime,
-        "endTime"     to endTime,
-        "travelMode"  to travelMode,
-        "purpose"     to purpose,
-        "companions"  to companions,
-        "cost"        to cost,
-        "status"      to status,
-        "date"        to date,
-        "distanceKm"  to distanceKm,
-        "routePoints" to routePoints
+        "origin"       to origin,
+        "destination"  to destination,
+        "startTime"    to startTime,
+        "endTime"      to endTime,
+        "travelMode"   to travelMode,
+        "purpose"      to purpose,
+        "companions"   to companions,
+        "cost"         to cost,
+        "status"       to status,
+        "date"         to date,
+        "distanceKm"   to distanceKm,
+        "durationSecs" to durationSecs,
+        "routePoints"  to routePoints
     )
 }

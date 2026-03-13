@@ -7,20 +7,24 @@ package com.example.autotrip.model
  * "lat,lng" strings (e.g. "19.8762,75.3433").  These are saved
  * to Firestore so the TripDetailsScreen can replay the polyline
  * on an OSM map even after the trip ends.
+ *
+ * [durationSecs] is the real-world travel time in seconds
+ * (simulation time is divided by 10x speed factor before saving).
  */
 data class Trip(
-    val id          : String = "",
-    val origin      : String = "",
-    val destination : String = "",
-    val startTime   : String = "",
-    val endTime     : String = "",
-    val travelMode  : String = "",
-    val purpose     : String = "",
-    val companions  : Int    = 0,
-    val cost        : Double = 0.0,
-    val status      : String = "",   // "Auto-logged" / "Needs Info"
-    val date        : String = "",   // yyyy-MM-dd
-    val distanceKm  : Double = 0.0,
+    val id           : String = "",
+    val origin       : String = "",
+    val destination  : String = "",
+    val startTime    : String = "",
+    val endTime      : String = "",
+    val travelMode   : String = "",
+    val purpose      : String = "",
+    val companions   : Int    = 0,
+    val cost         : Double = 0.0,
+    val status       : String = "",   // "Auto-logged" / "Needs Info"
+    val date         : String = "",   // yyyy-MM-dd
+    val distanceKm   : Double = 0.0,
+    val durationSecs : Int    = 0,    // real-world travel duration
     // Breadcrumb trail — each entry is "lat,lng"
-    val routePoints : List<String> = emptyList()
+    val routePoints  : List<String> = emptyList()
 )

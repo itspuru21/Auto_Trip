@@ -20,13 +20,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
@@ -45,7 +45,6 @@ import com.example.autotrip.viewmodel.TripsViewModel
 import kotlinx.coroutines.delay
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
@@ -61,11 +60,11 @@ import java.time.LocalDate
 fun TripDetailsScreen(
     navController  : NavController,
     tripId         : String,
-    authViewModel  : AuthViewModel? = null,
+    authViewModel  : AuthViewModel?  = null,
     tripsViewModel : TripsViewModel  = viewModel()
 ) {
-    val saveState by tripsViewModel.saveState.collectAsState()
-    val snackbarHost = remember { SnackbarHostState() }
+    val saveState    by tripsViewModel.saveState.collectAsState()
+    val snackbarHost  = remember { SnackbarHostState() }
 
     LaunchedEffect(saveState) {
         when (saveState) {
@@ -84,25 +83,28 @@ fun TripDetailsScreen(
     }
 
     val allTrips by tripsViewModel.trips.collectAsState()
-    var trip by remember { mutableStateOf<Trip?>(null) }
+    var trip     by remember { mutableStateOf<Trip?>(null) }
 
     LaunchedEffect(tripId, allTrips) {
         trip = allTrips.find { it.id == tripId }
+        // Firestore may not have loaded yet — wait briefly then show skeleton
         if (trip == null) {
             delay(200)
-            trip = Trip(
-                id          = tripId,
-                origin      = "Origin",
-                destination = "Destination",
-                startTime   = "—",
-                endTime     = "—",
-                travelMode  = "Car",
-                purpose     = "",
-                companions  = 0,
-                cost        = 0.0,
-                status      = "Needs Info",
-                date        = LocalDate.now().toString()
-            )
+            if (trip == null) {
+                trip = Trip(
+                    id          = tripId,
+                    origin      = "",
+                    destination = "",
+                    startTime   = "—",
+                    endTime     = "—",
+                    travelMode  = "",
+                    purpose     = "",
+                    companions  = 0,
+                    cost        = 0.0,
+                    status      = "Needs Info",
+                    date        = LocalDate.now().toString()
+                )
+            }
         }
     }
 
@@ -118,9 +120,9 @@ fun TripDetailsScreen(
         snackbarHost = { SnackbarHost(snackbarHost) }
     ) { padding ->
         AnimatedContent(
-            targetState  = trip,
+            targetState    = trip,
             transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) },
-            label        = "tripContent"
+            label          = "tripContent"
         ) { currentTrip ->
             if (currentTrip == null) {
                 Box(Modifier.fillMaxSize().padding(padding), Alignment.Center) {
@@ -128,10 +130,11 @@ fun TripDetailsScreen(
                 }
             } else {
                 TripDetailsContent(
-                    trip     = currentTrip,
-                    padding  = padding,
-                    isSaving = saveState is TripSaveState.Saving,
-                    onSave   = { updates -> tripsViewModel.updateTrip(currentTrip.id, updates) }
+                    trip      = currentTrip,
+                    padding   = padding,
+                    isSaving  = saveState is TripSaveState.Saving,
+                    onSave    = { updates -> tripsViewModel.updateTrip(currentTrip.id, updates) },
+                    onDiscard = { navController.popBackStack() }
                 )
             }
         }
@@ -144,15 +147,21 @@ fun TripDetailsScreen(
 
 @Composable
 private fun TripDetailsContent(
-    trip     : Trip,
-    padding  : PaddingValues,
-    isSaving : Boolean,
-    onSave   : (Map<String, Any>) -> Unit
+    trip      : Trip,
+    padding   : PaddingValues,
+    isSaving  : Boolean,
+    onSave    : (Map<String, Any>) -> Unit,
+    onDiscard : () -> Unit
 ) {
     var selectedMode    by remember(trip) { mutableStateOf(trip.travelMode) }
     var selectedPurpose by remember(trip) { mutableStateOf(trip.purpose) }
     var companions      by remember(trip) { mutableStateOf(trip.companions) }
     var costText        by remember(trip) { mutableStateOf(if (trip.cost > 0) trip.cost.toString() else "") }
+    var originName      by remember(trip) { mutableStateOf(trip.origin) }
+    var destName        by remember(trip) { mutableStateOf(trip.destination) }
+
+    // Mode AND purpose must be filled; companions and cost are optional
+    val canSave = selectedMode.isNotBlank() && selectedPurpose.isNotBlank()
 
     Column(
         modifier = Modifier
@@ -160,13 +169,11 @@ private fun TripDetailsContent(
             .padding(padding)
             .verticalScroll(rememberScrollState())
     ) {
-        // ── OSM Route Map (top of screen) ────────────────────────
+        // ── OSM route replay map ──────────────────────────────────
         if (trip.routePoints.isNotEmpty()) {
             TripRouteMap(
                 routePoints = trip.routePoints,
-                modifier    = Modifier
-                    .fillMaxWidth()
-                    .height(220.dp)
+                modifier    = Modifier.fillMaxWidth().height(220.dp)
             )
         }
 
@@ -176,21 +183,50 @@ private fun TripDetailsContent(
 
         Column(modifier = Modifier.padding(horizontal = 16.dp)) {
 
-            // ── Travel mode ──────────────────────────────────────────
+            // ── Editable place names ──────────────────────────────
+            SectionHeader(title = "Start Point Name", icon = Icons.Default.LocationOn)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value           = originName,
+                onValueChange   = { originName = it },
+                placeholder     = { Text("e.g. Home, Station, Office") },
+                singleLine      = true,
+                leadingIcon     = { Icon(Icons.Default.LocationOn, null, tint = Color(0xFF2E7D32)) },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                modifier        = Modifier.fillMaxWidth()
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            SectionHeader(title = "End Point Name", icon = Icons.Default.Flag)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value           = destName,
+                onValueChange   = { destName = it },
+                placeholder     = { Text("e.g. Mall, College, Hospital") },
+                singleLine      = true,
+                leadingIcon     = { Icon(Icons.Default.Flag, null, tint = Color(0xFFD32F2F)) },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                modifier        = Modifier.fillMaxWidth()
+            )
+
+            Spacer(Modifier.height(22.dp))
+
+            // ── Travel mode ───────────────────────────────────────
             SectionHeader(title = "Travel Mode", icon = Icons.Default.DirectionsCar)
             Spacer(Modifier.height(10.dp))
             ModeSelector(selected = selectedMode, onSelect = { selectedMode = it })
 
             Spacer(Modifier.height(22.dp))
 
-            // ── Purpose ──────────────────────────────────────────────
+            // ── Purpose ───────────────────────────────────────────
             SectionHeader(title = "Trip Purpose", icon = Icons.Default.Flag)
             Spacer(Modifier.height(10.dp))
             PurposeSelector(selected = selectedPurpose, onSelect = { selectedPurpose = it })
 
             Spacer(Modifier.height(22.dp))
 
-            // ── Companions + cost ─────────────────────────────────────
+            // ── Companions + cost ─────────────────────────────────
             Row(
                 modifier              = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -213,18 +249,59 @@ private fun TripDetailsContent(
 
             Spacer(Modifier.height(32.dp))
 
-            SaveButton(
-                isSaving = isSaving,
-                onClick  = {
+            // ── Validation hint ───────────────────────────────────
+            if (!canSave) {
+                Text(
+                    "⚠ Select travel mode and trip purpose to save",
+                    style    = MaterialTheme.typography.bodySmall,
+                    color    = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
+            // ── Save Trip ─────────────────────────────────────────
+            Button(
+                onClick   = {
                     onSave(mapOf(
+                        "origin"      to originName,
+                        "destination" to destName,
                         "travelMode"  to selectedMode,
                         "purpose"     to selectedPurpose,
                         "companions"  to companions,
                         "cost"        to (costText.toDoubleOrNull() ?: 0.0),
                         "status"      to "Auto-logged"
                     ))
+                },
+                enabled   = canSave && !isSaving,
+                modifier  = Modifier.fillMaxWidth().height(54.dp),
+                shape     = RoundedCornerShape(16.dp),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
+            ) {
+                if (isSaving) {
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
+                } else {
+                    Icon(Icons.Default.Save, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Save Trip", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                 }
-            )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // ── Discard Trip ──────────────────────────────────────
+            OutlinedButton(
+                onClick  = onDiscard,
+                enabled  = !isSaving,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape    = RoundedCornerShape(16.dp),
+                colors   = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Icon(Icons.Default.DeleteOutline, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Discard", fontWeight = FontWeight.Medium)
+            }
 
             Spacer(Modifier.height(32.dp))
         }
@@ -232,14 +309,11 @@ private fun TripDetailsContent(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRIP ROUTE MAP (OSMDroid — static replay of recorded route)
+// TRIP ROUTE MAP  —  green START, red END (fixes same-color issue)
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun TripRouteMap(
-    routePoints : List<String>,
-    modifier    : Modifier = Modifier
-) {
+private fun TripRouteMap(routePoints: List<String>, modifier: Modifier = Modifier) {
     val context = LocalContext.current
 
     val geoPoints = remember(routePoints) {
@@ -260,7 +334,6 @@ private fun TripRouteMap(
         MapView(context).apply {
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
-            // Disable user scrolling on the static detail map
             isClickable = false
         }
     }
@@ -270,49 +343,36 @@ private fun TripRouteMap(
         update  = { mv ->
             mv.overlays.clear()
 
-            // Draw the full route polyline
-            val polyline = Polyline().apply {
+            mv.overlays.add(Polyline().apply {
                 setPoints(geoPoints)
                 outlinePaint.color       = android.graphics.Color.parseColor("#1565C0")
                 outlinePaint.strokeWidth = 8f
-            }
-            mv.overlays.add(polyline)
+            })
 
-            // Start marker — green
-            val startMarker = Marker(mv).apply {
-                position  = geoPoints.first()
-                title     = "Start"
+            // Green start marker
+            mv.overlays.add(Marker(mv).apply {
+                position = geoPoints.first()
+                title    = "Start"
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-            }
-            mv.overlays.add(startMarker)
+                icon = context.getDrawable(org.osmdroid.library.R.drawable.marker_default)
+                    ?.apply { setTint(android.graphics.Color.parseColor("#2E7D32")) }
+            })
 
-            // End marker — red
-            val endMarker = Marker(mv).apply {
-                position  = geoPoints.last()
-                title     = "End"
+            // Red end marker
+            mv.overlays.add(Marker(mv).apply {
+                position = geoPoints.last()
+                title    = "End"
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-            }
-            mv.overlays.add(endMarker)
+                icon = context.getDrawable(org.osmdroid.library.R.drawable.marker_default)
+                    ?.apply { setTint(android.graphics.Color.parseColor("#D32F2F")) }
+            })
 
-            // Zoom map to fit the entire route
-            if (geoPoints.size > 1) {
-                val box = BoundingBox.fromGeoPoints(geoPoints)
-                mv.post {
-                    mv.zoomToBoundingBox(box.increaseByScale(1.3f), false)
-                    mv.invalidate()
-                }
-            } else {
-                mv.controller.setZoom(15.0)
-                mv.controller.setCenter(geoPoints.first())
-            }
+            val bounds = org.osmdroid.util.BoundingBox.fromGeoPoints(geoPoints)
+            mv.zoomToBoundingBox(bounds, true, 60)
+            mv.invalidate()
         },
         modifier = modifier
     )
-
-    DisposableEffect(Unit) {
-        mapView.onResume()
-        onDispose { mapView.onPause() }
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -321,51 +381,34 @@ private fun TripRouteMap(
 
 @Composable
 private fun RouteHeroCard(trip: Trip) {
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { visible = true }
+    val statusColor = if (trip.status == "Auto-logged") Color(0xFF2E7D32) else Color(0xFFFF8F00)
 
-    val alpha by animateFloatAsState(
-        targetValue   = if (visible) 1f else 0f,
-        animationSpec = tween(400), label = "heroAlpha"
-    )
-    val offsetY by animateDpAsState(
-        targetValue   = if (visible) 0.dp else (-16).dp,
-        animationSpec = tween(400, easing = FastOutSlowInEasing), label = "heroOffset"
-    )
-
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .offset(y = offsetY)
-            .alpha(alpha),
-        color = MaterialTheme.colorScheme.primary,
-        shape = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp)
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape    = RoundedCornerShape(bottomStart = 0.dp, bottomEnd = 0.dp),
+        colors   = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary)
     ) {
-        Column(
-            modifier            = Modifier.padding(horizontal = 24.dp, vertical = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Status badge
-            val (statusColor, statusBg) = when (trip.status) {
-                "Auto-logged" -> Pair(Color(0xFF69F0AE), Color(0xFF69F0AE).copy(alpha = 0.18f))
-                "Needs Info"  -> Pair(Color(0xFFFFD740), Color(0xFFFFD740).copy(alpha = 0.18f))
-                else          -> Pair(Color.White.copy(alpha = 0.7f), Color.White.copy(alpha = 0.12f))
-            }
-            Surface(shape = RoundedCornerShape(20.dp), color = statusBg) {
-                Row(
-                    modifier              = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                    verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    Box(modifier = Modifier.size(6.dp).background(statusColor, CircleShape))
-                    Text(trip.status, color = statusColor,
-                        fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment     = Alignment.CenterVertically
+            ) {
+                Text("Route", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                Surface(shape = CircleShape, color = statusColor.copy(alpha = 0.20f)) {
+                    Row(
+                        modifier              = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                        verticalAlignment     = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Box(modifier = Modifier.size(6.dp).background(statusColor, CircleShape))
+                        Text(trip.status, color = statusColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
 
             Spacer(Modifier.height(16.dp))
 
-            // Origin → Destination
             Row(
                 modifier              = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -374,75 +417,43 @@ private fun RouteHeroCard(trip: Trip) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("From", fontSize = 10.sp, color = Color.White.copy(alpha = 0.55f))
                     Spacer(Modifier.height(2.dp))
-                    Text(trip.origin.ifBlank { "—" },
-                        color = Color.White, fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp, maxLines = 2)
+                    Text(trip.origin.ifBlank { "—" }, color = Color.White,
+                        fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 2)
                     Box(modifier = Modifier.size(8.dp).background(Color(0xFF69F0AE), CircleShape))
                 }
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowForward, null,
-                    tint = Color.White.copy(alpha = 0.6f),
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, null,
+                    tint     = Color.White.copy(alpha = 0.6f),
                     modifier = Modifier.size(18.dp).padding(top = 16.dp))
-                Column(
-                    modifier            = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.End
-                ) {
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
                     Text("To", fontSize = 10.sp, color = Color.White.copy(alpha = 0.55f))
                     Spacer(Modifier.height(2.dp))
-                    Text(trip.destination.ifBlank { "—" },
-                        color = Color.White, fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp, maxLines = 2, textAlign = TextAlign.End)
+                    Text(trip.destination.ifBlank { "—" }, color = Color.White,
+                        fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
+                        maxLines = 2, textAlign = TextAlign.End)
                     Box(modifier = Modifier.size(8.dp).background(Color(0xFFFF6E40), CircleShape))
                 }
             }
 
             Spacer(Modifier.height(20.dp))
 
-            // Distance chip (shown if > 0)
-            if (trip.distanceKm > 0.0) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color.White.copy(alpha = 0.15f)
-                ) {
-                    Row(
-                        modifier              = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                        verticalAlignment     = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(Icons.Default.Route, null,
-                            tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(14.dp))
-                        Text("%.2f km".format(trip.distanceKm),
-                            color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    }
+            if (trip.distanceKm > 0) {
+                Surface(shape = CircleShape, color = Color.White.copy(alpha = 0.12f)) {
+                    Text("%.2f km".format(trip.distanceKm),
+                        modifier   = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                        color      = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                 }
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(8.dp))
             }
 
-            HorizontalDivider(color = Color.White.copy(alpha = 0.15f))
-            Spacer(Modifier.height(16.dp))
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                TripInfoChip(label = "Departed",  value = trip.startTime)
-                VerticalDividerLine()
-                TripInfoChip(label = "Arrived",   value = trip.endTime)
-                VerticalDividerLine()
-                TripInfoChip(label = "Trip ID",   value = "#${trip.id.takeLast(6).uppercase()}")
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("${trip.startTime} – ${trip.endTime}",
+                    color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                Text(trip.date, color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp)
             }
         }
-    }
-}
-
-@Composable
-private fun VerticalDividerLine() {
-    Box(modifier = Modifier.width(1.dp).height(32.dp).background(Color.White.copy(alpha = 0.18f)))
-}
-
-@Composable
-private fun TripInfoChip(label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, fontSize = 10.sp, color = Color.White.copy(alpha = 0.55f))
-        Spacer(Modifier.height(3.dp))
-        Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
     }
 }
 
@@ -452,107 +463,107 @@ private fun TripInfoChip(label: String, value: String) {
 
 @Composable
 private fun SectionHeader(title: String, icon: ImageVector) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(16.dp))
+    Row(verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
         Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODE SELECTOR
+// MODE SELECTOR — 2 rows of 3, no Metro, no external dependency
 // ─────────────────────────────────────────────────────────────────────────────
 
-private data class ModeOption(val label: String, val icon: ImageVector)
+private data class ModeOption(val label: String, val emoji: String)
 
 private val travelModeOptions = listOf(
-    ModeOption("Walk", Icons.AutoMirrored.Filled.DirectionsWalk),
-    ModeOption("Bike", Icons.AutoMirrored.Filled.DirectionsBike),
-    ModeOption("Car",   Icons.Default.DirectionsCar),
-    ModeOption("Bus",   Icons.Default.DirectionsBus),
-    ModeOption("Train", Icons.Default.Train),
-    ModeOption("Metro", Icons.Default.Subway)
+    ModeOption("Walk",          "🚶"),
+    ModeOption("Bike",          "🚲"),
+    ModeOption("Auto-Rickshaw", "🛺"),
+    ModeOption("Car",           "🚗"),
+    ModeOption("Bus",           "🚌"),
+    ModeOption("Train",         "🚆")
 )
 
 @Composable
 private fun ModeSelector(selected: String, onSelect: (String) -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        travelModeOptions.forEach { option ->
-            val isSelected = selected == option.label
-            val scale by animateFloatAsState(
-                targetValue   = if (isSelected) 1.06f else 1f,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-                label         = "modeScale"
-            )
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .scale(scale)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                        else Color.Transparent
+    val rows = travelModeOptions.chunked(3)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        rows.forEach { row ->
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                row.forEach { option ->
+                    val isSelected = selected == option.label
+                    val scale by animateFloatAsState(
+                        targetValue   = if (isSelected) 1.06f else 1f,
+                        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+                        label         = "modeScale"
                     )
-                    .border(
-                        width = if (isSelected) 1.5.dp else 1.dp,
-                        color = if (isSelected) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline.copy(alpha = 0.28f),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                    .clickable { onSelect(option.label) }
-                    .padding(vertical = 10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Icon(option.icon, contentDescription = option.label,
-                    tint     = if (isSelected) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp))
-                Spacer(Modifier.height(4.dp))
-                Text(option.label, fontSize = 10.sp,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                    color      = if (isSelected) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign  = TextAlign.Center)
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .scale(scale)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (isSelected) MaterialTheme.colorScheme.primary.copy(0.12f)
+                                else Color.Transparent
+                            )
+                            .border(
+                                width = if (isSelected) 1.5.dp else 1.dp,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.outline.copy(0.28f),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .clickable { onSelect(option.label) }
+                            .padding(vertical = 10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(option.emoji, fontSize = 18.sp)
+                        Text(
+                            option.label.split("-").first(),
+                            style      = MaterialTheme.typography.labelSmall,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            color      = if (isSelected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface,
+                            maxLines   = 1
+                        )
+                    }
+                }
+                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PURPOSE CHIPS
+// PURPOSE SELECTOR — 2 rows of 4, no external dependency
 // ─────────────────────────────────────────────────────────────────────────────
 
 private val purposeOptions = listOf(
-    "Work", "Home", "Shopping", "Meals",
-    "Recreation", "Social", "Education", "Healthcare", "Other"
+    "Work / Office", "Education", "Shopping", "Recreation",
+    "Medical", "Personal", "Return Home", "Other"
 )
 
 @Composable
 private fun PurposeSelector(selected: String, onSelect: (String) -> Unit) {
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement   = Arrangement.spacedBy(8.dp)
-    ) {
-        purposeOptions.forEach { purpose ->
-            val isSelected = selected == purpose
-            FilterChip(
-                selected = isSelected,
-                onClick  = { onSelect(purpose) },
-                label    = {
-                    Text(purpose, fontSize = 12.sp,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal)
-                },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary,
-                    selectedLabelColor     = MaterialTheme.colorScheme.onPrimary
-                ),
-                border = FilterChipDefaults.filterChipBorder(
-                    enabled             = true,
-                    selected            = isSelected,
-                    borderColor         = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f),
-                    selectedBorderColor = Color.Transparent
-                )
-            )
+    val rows = purposeOptions.chunked(4)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        rows.forEach { row ->
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                row.forEach { option ->
+                    FilterChip(
+                        selected  = selected == option,
+                        onClick   = { onSelect(option) },
+                        label     = { Text(option, fontSize = 11.sp, maxLines = 1) },
+                        modifier  = Modifier.weight(1f),
+                        colors    = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(0.12f),
+                            selectedLabelColor     = MaterialTheme.colorScheme.primary
+                        )
+                    )
+                }
+                repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+            }
         }
     }
 }
@@ -563,35 +574,20 @@ private fun PurposeSelector(selected: String, onSelect: (String) -> Unit) {
 
 @Composable
 private fun CompanionsStepper(value: Int, onDecrease: () -> Unit, onIncrease: () -> Unit) {
-    Surface(
-        shape    = RoundedCornerShape(12.dp),
-        color    = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        modifier = Modifier.fillMaxWidth()
+    Row(
+        modifier              = Modifier
+            .fillMaxWidth()
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(0.3f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment     = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Row(modifier = Modifier.padding(4.dp),
-            verticalAlignment     = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween) {
-            IconButton(onClick = onDecrease, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.Remove, "Decrease",
-                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-            }
-            AnimatedContent(
-                targetState  = value,
-                transitionSpec = {
-                    if (targetState > initialState)
-                        slideInVertically { -it } togetherWith slideOutVertically { it }
-                    else
-                        slideInVertically { it } togetherWith slideOutVertically { -it }
-                },
-                label = "companionCount"
-            ) { count ->
-                Text(count.toString(), fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center, modifier = Modifier.widthIn(min = 28.dp))
-            }
-            IconButton(onClick = onIncrease, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.Add, "Increase",
-                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-            }
+        IconButton(onClick = onDecrease, enabled = value > 0) {
+            Icon(Icons.Default.Remove, null, tint = MaterialTheme.colorScheme.primary)
+        }
+        Text("$value", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        IconButton(onClick = onIncrease) {
+            Icon(Icons.Default.Add, null, tint = MaterialTheme.colorScheme.primary)
         }
     }
 }
@@ -603,62 +599,13 @@ private fun CompanionsStepper(value: Int, onDecrease: () -> Unit, onIncrease: ()
 @Composable
 private fun CostField(value: String, onChange: (String) -> Unit) {
     OutlinedTextField(
-        value         = value,
-        onValueChange = { if (it.all { c -> c.isDigit() || c == '.' }) onChange(it) },
-        modifier      = Modifier.fillMaxWidth(),
-        placeholder   = { Text("0.00", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)) },
-        prefix        = { Text("₹ ", fontWeight = FontWeight.Medium) },
+        value           = value,
+        onValueChange   = onChange,
+        placeholder     = { Text("0.00") },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        singleLine    = true,
-        shape         = RoundedCornerShape(12.dp),
-        colors        = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary)
+        singleLine      = true,
+        modifier        = Modifier.fillMaxWidth()
     )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SAVE BUTTON
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-private fun SaveButton(isSaving: Boolean, onClick: () -> Unit) {
-    var pressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(
-        targetValue   = if (pressed) 0.95f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy),
-        label         = "btnScale"
-    )
-
-    Button(
-        onClick   = { pressed = true; onClick() },
-        modifier  = Modifier.fillMaxWidth().height(56.dp).scale(scale),
-        enabled   = !isSaving,
-        shape     = RoundedCornerShape(16.dp),
-        colors    = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
-    ) {
-        AnimatedContent(
-            targetState  = isSaving,
-            transitionSpec = { fadeIn() togetherWith fadeOut() },
-            label        = "btnContent"
-        ) { saving ->
-            if (saving) {
-                Row(verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    Text("Saving…", color = MaterialTheme.colorScheme.onPrimary)
-                }
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Default.Check, null,
-                        tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(20.dp))
-                    Text("Save Trip", color = MaterialTheme.colorScheme.onPrimary,
-                        fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-                }
-            }
-        }
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -667,6 +614,6 @@ private fun SaveButton(isSaving: Boolean, onClick: () -> Unit) {
 
 @Preview(showBackground = true, showSystemUi = true)
 @Composable
-fun PreviewTripDetailsScreen() {
-    AutoTripTheme { TripDetailsScreen(rememberNavController(), tripId = "preview-001") }
+fun PreviewTripDetails() {
+    AutoTripTheme { TripDetailsScreen(rememberNavController(), "preview_id") }
 }
