@@ -304,10 +304,6 @@ private fun ActiveTrackingPhase(
         if (h > 0) "%02d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
     }
 
-    val pulseAnim  = rememberInfiniteTransition(label = "pulse")
-    val pulseScale by pulseAnim.animateFloat(
-        1f, 1.15f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "pulseScale"
-    )
 
     Column(
         modifier            = Modifier.fillMaxSize().padding(padding),
@@ -316,7 +312,7 @@ private fun ActiveTrackingPhase(
         Spacer(Modifier.height(16.dp))
 
         // Live map
-        if (routePoints.isNotEmpty()) {
+//        if (routePoints.isNotEmpty()) {
             LiveRouteMap(
                 routePoints = routePoints,
                 modifier    = Modifier.fillMaxWidth().height(180.dp)
@@ -324,11 +320,11 @@ private fun ActiveTrackingPhase(
                     .clip(RoundedCornerShape(16.dp))
             )
             Spacer(Modifier.height(16.dp))
-        }
+//        }
 
         // Pulsing dot
         Box(
-            modifier = Modifier.size(56.dp * pulseScale).clip(CircleShape)
+            modifier = Modifier.size(56.dp ).clip(CircleShape)
                 .background(
                     if (isSimulating) Color(0xFF1565C0).copy(alpha = 0.15f)
                     else MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)

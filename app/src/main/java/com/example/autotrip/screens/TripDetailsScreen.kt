@@ -475,7 +475,6 @@ private val travelModes = listOf(
     Triple("Auto",       Icons.Default.ElectricRickshaw,            Color(0xFF00838F)),
     Triple("Bike",       Icons.AutoMirrored.Filled.DirectionsBike,  Color(0xFF2E7D32)),
     Triple("Walk",       Icons.AutoMirrored.Filled.DirectionsWalk,  Color(0xFF558B2F)),
-    Triple("Train",      Icons.Default.Train,                       Color(0xFFAD1457)),
     Triple("Other",      Icons.Default.MoreHoriz,                   Color(0xFF4E342E))
 )
 

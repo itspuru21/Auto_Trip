@@ -1,17 +1,16 @@
 package com.example.autotrip.simulation
 
+// AFTER:
 enum class SimMode(
     val label       : String,
     val avgSpeedKmh : Double,
     val emoji       : String
 ) {
-    WALK   ("Walking",       5.0,  "🚶"),
-    BICYCLE("Bicycle",      15.0,  "🚲"),
-    AUTO   ("Auto-Rickshaw",20.0,  "🛺"),
-    BUS    ("Bus",          25.0,  "🚌"),
-    CAR    ("Car",          40.0,  "🚗")
-    // Metro removed — not in scope for current build.
-    // Keep this file clean; re-add if NATPAC requires it.
+    CAR    ("Car",           32.0,  "🚗"),   // city traffic avg ~25-30 km/h
+    BUS    ("Bus",           26.0,  "🚌"),   // stops + traffic ~15-20 km/h
+    AUTO   ("Auto-Rickshaw", 30.0,  "🛺"),   // weaves through traffic ~20-25 km/h
+    BIKE   ("Bike",          32.0,  "🏍️"),  // motorbike, faster lane filtering
+    OTHER  ("Other",         25.0,  "🚘")   // generic vehicle
 }
 
 data class SimPreset(
