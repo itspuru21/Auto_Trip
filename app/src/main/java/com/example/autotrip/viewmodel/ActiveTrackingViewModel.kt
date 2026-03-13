@@ -25,7 +25,7 @@ class ActiveTrackingViewModel : ViewModel() {
     private val _distanceKm  = MutableStateFlow(0.0)
     val distanceKm: StateFlow<Double> = _distanceKm
 
-    private val _speedKmh    = MutableStateFlow(0.0)
+    private val _speedKmh = MutableStateFlow(0.0)
     val speedKmh: StateFlow<Double> = _speedKmh
 
     private val _routePoints = MutableStateFlow<List<Pair<Double, Double>>>(emptyList())
@@ -38,23 +38,32 @@ class ActiveTrackingViewModel : ViewModel() {
     val isLoading: StateFlow<Boolean> = _isLoading
 
     sealed class SaveState {
-        object Idle    : SaveState()
-        object Saving  : SaveState()
-        data class Saved(val tripId: String) : SaveState()
-        data class Error(val message: String) : SaveState()
+        object Idle   : SaveState()
+        object Saving : SaveState()
+        class Saved(val tripId: String) : SaveState()
+        class Error(val message: String) : SaveState()
     }
+
     private val _saveState = MutableStateFlow<SaveState>(SaveState.Idle)
     val saveState: StateFlow<SaveState> = _saveState
 
-    // ── Internal ─────────────────────────────────────────────────
+    // ── Internal ──────────────────────────────────────────────────
 
-    private var provider     : LocationProvider? = null
-    private var lastLocation : android.location.Location? = null
+    private var provider     : LocationProvider?           = null
+    private var lastLocation : android.location.Location?  = null
     private var totalDistM   = 0.0
     private var startTimeMs  = 0L
     private var isSimMode    = false
 
-    // ── Public API ───────────────────────────────────────────────
+    /**
+     * Speed of the selected vehicle mode in km/h.
+     * Stored at simulation start so trip duration is calculated purely from math:
+     *   duration = distance / speed
+     * e.g. 6 km at 20 km/h = 18 minutes — no timer multiplication needed.
+     */
+    private var simSpeedKmh  = 0.0
+
+    // ── Public API ────────────────────────────────────────────────
 
     fun startTracking(context: Context) {
         resetState()
@@ -63,9 +72,10 @@ class ActiveTrackingViewModel : ViewModel() {
         startWithProvider(RealLocationProvider(context))
     }
 
-    fun startSimulation(provider: SimulatedLocationProvider) {
+    fun startSimulation(provider: SimulatedLocationProvider, speedKmh: Double = 0.0) {
         resetState()
         isSimMode           = true
+        simSpeedKmh         = speedKmh
         _isSimulating.value = true
         _isLoading.value    = true
         startWithProvider(provider)
@@ -78,6 +88,9 @@ class ActiveTrackingViewModel : ViewModel() {
     }
 
     private fun onLocationReceived(loc: android.location.Location) {
+        // Guard: ignore callbacks that arrive after stopUpdates()
+        if (provider == null) return
+
         if (_isLoading.value) _isLoading.value = false
 
         lastLocation?.let { prev ->
@@ -97,29 +110,46 @@ class ActiveTrackingViewModel : ViewModel() {
     }
 
     /**
-     * [elapsedUiSecs] = seconds as counted by the UI timer (which runs at real time).
-     * For simulation (10× speed), the REAL travel time = elapsedUiSecs × 10.
-     * endTime is computed as startTime + realDurationMs so it's accurate.
+     * Stop tracking and save the trip.
+     *
+     * Time calculation:
+     *  - SIMULATION: duration = distance / vehicle speed  (pure math, no timer)
+     *      e.g. 6 km / 20 km/h = 0.3 h = 18 min = 1080 seconds
+     *  - REAL tracking: duration = wall-clock elapsed from the UI timer
+     *
+     * endTime is set as startTime + calculatedDuration so it is always accurate.
      */
     fun stopTrackingAndSave(origin: String, destination: String, elapsedUiSecs: Int) {
-        provider?.stopUpdates()
+        // Null out provider BEFORE calling stopUpdates so any in-flight callbacks
+        // hit the provider == null guard and return early — this prevents the freeze
+        val stoppedProvider = provider
         provider = null
+        stoppedProvider?.stopUpdates()
 
         val uid = authRepo.currentUser?.uid
-        if (uid == null) { _saveState.value = SaveState.Error("Not logged in"); return }
+        if (uid == null) {
+            _saveState.value = SaveState.Error("Not logged in")
+            return
+        }
 
-        if (totalDistM < 100.0 && elapsedUiSecs < 30) {
+        // Math-based duration for simulation; elapsed timer for real tracking
+        val realDurationSecs: Int = if (isSimMode && simSpeedKmh > 0.0) {
+            val distKm      = totalDistM / 1000.0
+            val travelHours = distKm / simSpeedKmh   // e.g. 6.0 / 20.0 = 0.3 hours
+            (travelHours * 3600).toInt()              // → seconds (e.g. 1080 = 18 min)
+        } else {
+            elapsedUiSecs
+        }
+
+        // Reject genuinely empty trips
+        if (totalDistM < 50.0 && realDurationSecs < 10) {
             _saveState.value = SaveState.Error("Trip too short to record")
             return
         }
 
-        val timeFmt = SimpleDateFormat("h:mm a", Locale.getDefault())
-        val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-
-        // For simulations the UI timer runs in real-time but movement is at 10×.
-        // Real travel duration = elapsed * 10 for sim, elapsed * 1 for real.
-        val realDurationSecs = if (isSimMode) elapsedUiSecs * 10 else elapsedUiSecs
-        val endTimeMs        = startTimeMs + (realDurationSecs * 1000L)
+        val timeFmt   = SimpleDateFormat("h:mm a", Locale.getDefault())
+        val dateFmt   = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val endTimeMs = startTimeMs + (realDurationSecs * 1000L)
 
         val trip = Trip(
             id           = "",
@@ -150,20 +180,22 @@ class ActiveTrackingViewModel : ViewModel() {
 
     /** Discard — stop provider without saving anything. */
     fun discardTrip() {
-        provider?.stopUpdates()
+        val stoppedProvider = provider
         provider = null
+        stoppedProvider?.stopUpdates()
         resetState()
         _saveState.value = SaveState.Idle
     }
 
     private fun resetState() {
-        lastLocation      = null
-        totalDistM        = 0.0
-        startTimeMs       = 0L
-        _distanceKm.value = 0.0
-        _speedKmh.value   = 0.0
+        lastLocation       = null
+        totalDistM         = 0.0
+        startTimeMs        = 0L
+        simSpeedKmh        = 0.0
+        _distanceKm.value  = 0.0
+        _speedKmh.value    = 0.0
         _routePoints.value = emptyList()
-        _saveState.value  = SaveState.Idle
-        _isLoading.value  = false
+        _saveState.value   = SaveState.Idle
+        _isLoading.value   = false
     }
 }

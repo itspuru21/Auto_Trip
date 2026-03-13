@@ -81,14 +81,13 @@ fun ActiveTrackingSimScreen(
 ) {
     val trackingVm: ActiveTrackingViewModel = viewModel()
 
-    LaunchedEffect(Unit) {
-        val origin = SimPreset(originName, originLat, originLng)
-        val dest   = SimPreset(destName,   destLat,   destLng)
-        val mode   = SimMode.entries.firstOrNull { it.name == modeName } ?: SimMode.CAR
-
-        val provider = SimulatedLocationProvider(origin, dest, mode)
-        trackingVm.startSimulation(provider)
-    }
+     LaunchedEffect(Unit) {
+         val origin   = SimPreset(originName, originLat, originLng)
+         val dest     = SimPreset(destName,   destLat,   destLng)
+         val mode     = SimMode.entries.firstOrNull { it.name == modeName } ?: SimMode.CAR
+         val provider = SimulatedLocationProvider(origin, dest, mode)
+         trackingVm.startSimulation(provider, speedKmh = mode.avgSpeedKmh)
+     }
 
     ActiveTrackingContent(
         navController = navController,

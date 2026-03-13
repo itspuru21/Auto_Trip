@@ -42,7 +42,8 @@ import com.example.autotrip.ui.theme.AutoTripTheme
 import com.example.autotrip.viewmodel.AuthViewModel
 import com.example.autotrip.viewmodel.TripSaveState
 import com.example.autotrip.viewmodel.TripsViewModel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
@@ -66,6 +67,7 @@ fun TripDetailsScreen(
     val saveState    by tripsViewModel.saveState.collectAsState()
     val snackbarHost  = remember { SnackbarHostState() }
 
+    // Navigate home after a successful save
     LaunchedEffect(saveState) {
         when (saveState) {
             is TripSaveState.Saved -> {
@@ -82,29 +84,35 @@ fun TripDetailsScreen(
         }
     }
 
+    // ── Load trip: first try the in-memory flow, then fall back to direct Firestore fetch ──
+    // This avoids the race where the flow hasn't loaded yet when navigating from End Trip.
     val allTrips by tripsViewModel.trips.collectAsState()
     var trip     by remember { mutableStateOf<Trip?>(null) }
 
     LaunchedEffect(tripId, allTrips) {
-        trip = allTrips.find { it.id == tripId }
-        // Firestore may not have loaded yet — wait briefly then show skeleton
-        if (trip == null) {
-            delay(200)
-            if (trip == null) {
-                trip = Trip(
-                    id          = tripId,
-                    origin      = "",
-                    destination = "",
-                    startTime   = "—",
-                    endTime     = "—",
-                    travelMode  = "",
-                    purpose     = "",
-                    companions  = 0,
-                    cost        = 0.0,
-                    status      = "Needs Info",
-                    date        = LocalDate.now().toString()
-                )
-            }
+        // Try the already-loaded list first (instant)
+        val found = allTrips.find { it.id == tripId }
+        if (found != null) {
+            trip = found
+            return@LaunchedEffect
+        }
+        // Not in list yet — fetch directly from Firestore on IO thread (won't block UI)
+        val fetched = withContext(Dispatchers.IO) {
+            tripsViewModel.fetchTripById(tripId)
+        }
+        if (fetched != null) {
+            trip = fetched
+        } else {
+            // Last resort skeleton so screen doesn't stay blank
+            trip = Trip(
+                id          = tripId,
+                origin      = "",
+                destination = "",
+                startTime   = "—",
+                endTime     = "—",
+                status      = "Needs Info",
+                date        = LocalDate.now().toString()
+            )
         }
     }
 
@@ -203,65 +211,57 @@ private fun TripDetailsContent(
             OutlinedTextField(
                 value           = destName,
                 onValueChange   = { destName = it },
-                placeholder     = { Text("e.g. Mall, College, Hospital") },
+                placeholder     = { Text("e.g. Office, Mall, Hospital") },
                 singleLine      = true,
                 leadingIcon     = { Icon(Icons.Default.Flag, null, tint = Color(0xFFD32F2F)) },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 modifier        = Modifier.fillMaxWidth()
             )
 
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(24.dp))
 
-            // ── Travel mode ───────────────────────────────────────
+            // ── Travel Mode ───────────────────────────────────────
             SectionHeader(title = "Travel Mode", icon = Icons.Default.DirectionsCar)
             Spacer(Modifier.height(10.dp))
-            ModeSelector(selected = selectedMode, onSelect = { selectedMode = it })
+            TravelModeGrid(selected = selectedMode, onSelect = { selectedMode = it })
 
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(24.dp))
 
             // ── Purpose ───────────────────────────────────────────
-            SectionHeader(title = "Trip Purpose", icon = Icons.Default.Flag)
+            SectionHeader(title = "Trip Purpose", icon = Icons.Default.Info)
             Spacer(Modifier.height(10.dp))
-            PurposeSelector(selected = selectedPurpose, onSelect = { selectedPurpose = it })
+            PurposeGrid(selected = selectedPurpose, onSelect = { selectedPurpose = it })
 
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(24.dp))
 
-            // ── Companions + cost ─────────────────────────────────
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    SectionHeader(title = "Companions", icon = Icons.Default.People)
-                    Spacer(Modifier.height(10.dp))
-                    CompanionsStepper(
-                        value      = companions,
-                        onDecrease = { if (companions > 0) companions-- },
-                        onIncrease = { companions++ }
-                    )
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    SectionHeader(title = "Cost (₹)", icon = Icons.Default.CurrencyRupee)
-                    Spacer(Modifier.height(10.dp))
-                    CostField(value = costText, onChange = { costText = it })
-                }
-            }
+            // ── Companions ────────────────────────────────────────
+            SectionHeader(title = "Companions (optional)", icon = Icons.Default.Group)
+            Spacer(Modifier.height(10.dp))
+            CompanionsRow(count = companions, onChange = { companions = it })
+
+            Spacer(Modifier.height(24.dp))
+
+            // ── Cost ──────────────────────────────────────────────
+            SectionHeader(title = "Cost (optional)", icon = Icons.Default.CurrencyRupee)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value           = costText,
+                onValueChange   = { costText = it.filter { c -> c.isDigit() || c == '.' } },
+                placeholder     = { Text("e.g. 45.50") },
+                singleLine      = true,
+                leadingIcon     = { Icon(Icons.Default.CurrencyRupee, null) },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Decimal,
+                    imeAction    = ImeAction.Done
+                ),
+                modifier        = Modifier.fillMaxWidth()
+            )
 
             Spacer(Modifier.height(32.dp))
 
-            // ── Validation hint ───────────────────────────────────
-            if (!canSave) {
-                Text(
-                    "⚠ Select travel mode and trip purpose to save",
-                    style    = MaterialTheme.typography.bodySmall,
-                    color    = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-            }
-
-            // ── Save Trip ─────────────────────────────────────────
+            // ── Save button ───────────────────────────────────────
             Button(
-                onClick   = {
+                onClick = {
                     onSave(mapOf(
                         "origin"      to originName,
                         "destination" to destName,
@@ -288,7 +288,7 @@ private fun TripDetailsContent(
 
             Spacer(Modifier.height(12.dp))
 
-            // ── Discard Trip ──────────────────────────────────────
+            // ── Discard button ────────────────────────────────────
             OutlinedButton(
                 onClick  = onDiscard,
                 enabled  = !isSaving,
@@ -309,13 +309,16 @@ private fun TripDetailsContent(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRIP ROUTE MAP  —  green START, red END (fixes same-color issue)
+// TRIP ROUTE MAP — deferred rendering to prevent ANR
+// zoomToBoundingBox is posted to the View's handler so it NEVER blocks the
+// main thread during initial composition (which was causing the freeze).
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun TripRouteMap(routePoints: List<String>, modifier: Modifier = Modifier) {
     val context = LocalContext.current
 
+    // Parse points on the calling thread (already IO-side by the time we get here)
     val geoPoints = remember(routePoints) {
         routePoints.mapNotNull { entry ->
             val parts = entry.split(",")
@@ -367,12 +370,28 @@ private fun TripRouteMap(routePoints: List<String>, modifier: Modifier = Modifie
                     ?.apply { setTint(android.graphics.Color.parseColor("#D32F2F")) }
             })
 
-            val bounds = org.osmdroid.util.BoundingBox.fromGeoPoints(geoPoints)
-            mv.zoomToBoundingBox(bounds, true, 60)
-            mv.invalidate()
+            // KEY FIX: post zoomToBoundingBox so it runs AFTER the view is laid out.
+            // Calling it synchronously here was blocking the main thread → ANR freeze.
+            mv.post {
+                try {
+                    val bounds = org.osmdroid.util.BoundingBox.fromGeoPoints(geoPoints)
+                    mv.zoomToBoundingBox(bounds, false, 80)
+                    mv.invalidate()
+                } catch (_: Exception) {
+                    // Fallback if bounds calc fails (e.g. single point)
+                    mv.controller.setZoom(14.0)
+                    mv.controller.setCenter(geoPoints.first())
+                    mv.invalidate()
+                }
+            }
         },
         modifier = modifier
     )
+
+    DisposableEffect(Unit) {
+        mapView.onResume()
+        onDispose { mapView.onPause() }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -381,78 +400,233 @@ private fun TripRouteMap(routePoints: List<String>, modifier: Modifier = Modifie
 
 @Composable
 private fun RouteHeroCard(trip: Trip) {
-    val statusColor = if (trip.status == "Auto-logged") Color(0xFF2E7D32) else Color(0xFFFF8F00)
+    val statusColor = if (trip.status == "Auto-logged") Color(0xFF2E7D32) else Color(0xFFF57F17)
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape    = RoundedCornerShape(bottomStart = 0.dp, bottomEnd = 0.dp),
-        colors   = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary)
+    Surface(
+        modifier       = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        shape          = RoundedCornerShape(20.dp),
+        tonalElevation = 3.dp,
+        shadowElevation = 4.dp
     ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment     = Alignment.CenterVertically
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+
+            // Status badge
+            Surface(
+                shape = RoundedCornerShape(50.dp),
+                color = statusColor.copy(alpha = 0.12f)
             ) {
-                Text("Route", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
-                Surface(shape = CircleShape, color = statusColor.copy(alpha = 0.20f)) {
-                    Row(
-                        modifier              = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                        verticalAlignment     = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        Box(modifier = Modifier.size(6.dp).background(statusColor, CircleShape))
-                        Text(trip.status, color = statusColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
+                Text(
+                    text     = trip.status.ifBlank { "Needs Info" },
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    color    = statusColor,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
 
-            Spacer(Modifier.height(16.dp))
-
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment     = Alignment.Top
-            ) {
+            // Route row
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("From", fontSize = 10.sp, color = Color.White.copy(alpha = 0.55f))
-                    Spacer(Modifier.height(2.dp))
-                    Text(trip.origin.ifBlank { "—" }, color = Color.White,
-                        fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 2)
-                    Box(modifier = Modifier.size(8.dp).background(Color(0xFF69F0AE), CircleShape))
+                    Text("From", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                    Text(trip.origin.ifBlank { "—" },
+                        fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                 }
                 Icon(Icons.AutoMirrored.Filled.ArrowForward, null,
-                    tint     = Color.White.copy(alpha = 0.6f),
-                    modifier = Modifier.size(18.dp).padding(top = 16.dp))
-                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                    Text("To", fontSize = 10.sp, color = Color.White.copy(alpha = 0.55f))
-                    Spacer(Modifier.height(2.dp))
-                    Text(trip.destination.ifBlank { "—" }, color = Color.White,
-                        fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
-                        maxLines = 2, textAlign = TextAlign.End)
-                    Box(modifier = Modifier.size(8.dp).background(Color(0xFFFF6E40), CircleShape))
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.padding(horizontal = 8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("To", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                    Text(trip.destination.ifBlank { "—" },
+                        fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                 }
             }
 
-            Spacer(Modifier.height(20.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
 
-            if (trip.distanceKm > 0) {
-                Surface(shape = CircleShape, color = Color.White.copy(alpha = 0.12f)) {
-                    Text("%.2f km".format(trip.distanceKm),
-                        modifier   = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                        color      = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            // Stats row
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                TripStat(label = "Date",     value = trip.date.ifBlank { "—" })
+                TripStat(label = "Start",    value = trip.startTime.ifBlank { "—" })
+                TripStat(label = "End",      value = trip.endTime.ifBlank { "—" })
+                TripStat(label = "Distance", value = if (trip.distanceKm > 0) "%.1f km".format(trip.distanceKm) else "—")
+            }
+        }
+    }
+}
+
+@Composable
+private fun TripStat(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f))
+        Text(value, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TRAVEL MODE GRID
+// ─────────────────────────────────────────────────────────────────────────────
+
+private val travelModes = listOf(
+    Triple("Car",        Icons.Default.DirectionsCar,               Color(0xFF1565C0)),
+    Triple("Bus",        Icons.Default.DirectionsBus,               Color(0xFF6A1B9A)),
+    Triple("Auto",       Icons.Default.ElectricRickshaw,            Color(0xFF00838F)),
+    Triple("Bike",       Icons.AutoMirrored.Filled.DirectionsBike,  Color(0xFF2E7D32)),
+    Triple("Walk",       Icons.AutoMirrored.Filled.DirectionsWalk,  Color(0xFF558B2F)),
+    Triple("Train",      Icons.Default.Train,                       Color(0xFFAD1457)),
+    Triple("Other",      Icons.Default.MoreHoriz,                   Color(0xFF4E342E))
+)
+
+@Composable
+private fun TravelModeGrid(selected: String, onSelect: (String) -> Unit) {
+    val rows = travelModes.chunked(4)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        rows.forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { (label, icon, color) ->
+                    ModeChip(
+                        label    = label,
+                        icon     = icon,
+                        color    = color,
+                        selected = selected == label,
+                        onClick  = { onSelect(label) },
+                        modifier = Modifier.weight(1f)
+                    )
                 }
-                Spacer(Modifier.height(8.dp))
+                // Fill empty slots in last row
+                repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
             }
+        }
+    }
+}
 
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text("${trip.startTime} – ${trip.endTime}",
-                    color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
-                Text(trip.date, color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp)
+@Composable
+private fun ModeChip(
+    label    : String,
+    icon     : ImageVector,
+    color    : Color,
+    selected : Boolean,
+    onClick  : () -> Unit,
+    modifier : Modifier = Modifier
+) {
+    val bgColor  = if (selected) color.copy(alpha = 0.13f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    val border   = if (selected) color.copy(alpha = 0.6f) else Color.Transparent
+    val scale    by animateFloatAsState(if (selected) 1.04f else 1f, label = "modeScale")
+
+    Surface(
+        shape    = RoundedCornerShape(12.dp),
+        color    = bgColor,
+        modifier = modifier
+            .scale(scale)
+            .border(1.5.dp, border, RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+    ) {
+        Column(
+            modifier            = Modifier.padding(vertical = 10.dp, horizontal = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(icon, contentDescription = label,
+                tint     = if (selected) color else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp))
+            Text(label,
+                fontSize   = 11.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                color      = if (selected) color else MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign  = TextAlign.Center)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PURPOSE GRID
+// ─────────────────────────────────────────────────────────────────────────────
+
+private val purposes = listOf(
+    "Work", "Education", "Shopping", "Medical",
+    "Recreation", "Religious", "Social", "Other"
+)
+
+@Composable
+private fun PurposeGrid(selected: String, onSelect: (String) -> Unit) {
+    val rows = purposes.chunked(4)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        rows.forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { label ->
+                    PurposeChip(
+                        label    = label,
+                        selected = selected == label,
+                        onClick  = { onSelect(label) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun PurposeChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val color   = MaterialTheme.colorScheme.primary
+    val bgColor = if (selected) color.copy(alpha = 0.13f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    val border  = if (selected) color.copy(alpha = 0.6f) else Color.Transparent
+    val scale   by animateFloatAsState(if (selected) 1.04f else 1f, label = "purposeScale")
+
+    Surface(
+        shape    = RoundedCornerShape(10.dp),
+        color    = bgColor,
+        modifier = modifier
+            .scale(scale)
+            .border(1.5.dp, border, RoundedCornerShape(10.dp))
+            .clickable { onClick() }
+    ) {
+        Box(Modifier.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+            Text(
+                text       = label,
+                fontSize   = 12.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                color      = if (selected) color else MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign  = TextAlign.Center
+            )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPANIONS ROW
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun CompanionsRow(count: Int, onChange: (Int) -> Unit) {
+    Row(
+        modifier          = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        IconButton(
+            onClick  = { if (count > 0) onChange(count - 1) },
+            enabled  = count > 0,
+            modifier = Modifier.size(40.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+        ) {
+            Icon(Icons.Default.Remove, null, modifier = Modifier.size(18.dp))
+        }
+        Text(
+            text       = count.toString(),
+            modifier   = Modifier.weight(1f),
+            textAlign  = TextAlign.Center,
+            fontWeight = FontWeight.Bold,
+            fontSize   = 20.sp
+        )
+        IconButton(
+            onClick  = { onChange(count + 1) },
+            modifier = Modifier.size(40.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+        ) {
+            Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
         }
     }
 }
@@ -463,149 +637,10 @@ private fun RouteHeroCard(trip: Trip) {
 
 @Composable
 private fun SectionHeader(title: String, icon: ImageVector) {
-    Row(verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+        Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
     }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MODE SELECTOR — 2 rows of 3, no Metro, no external dependency
-// ─────────────────────────────────────────────────────────────────────────────
-
-private data class ModeOption(val label: String, val emoji: String)
-
-private val travelModeOptions = listOf(
-    ModeOption("Walk",          "🚶"),
-    ModeOption("Bike",          "🚲"),
-    ModeOption("Auto-Rickshaw", "🛺"),
-    ModeOption("Car",           "🚗"),
-    ModeOption("Bus",           "🚌"),
-    ModeOption("Train",         "🚆")
-)
-
-@Composable
-private fun ModeSelector(selected: String, onSelect: (String) -> Unit) {
-    val rows = travelModeOptions.chunked(3)
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        rows.forEach { row ->
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                row.forEach { option ->
-                    val isSelected = selected == option.label
-                    val scale by animateFloatAsState(
-                        targetValue   = if (isSelected) 1.06f else 1f,
-                        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-                        label         = "modeScale"
-                    )
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .scale(scale)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                if (isSelected) MaterialTheme.colorScheme.primary.copy(0.12f)
-                                else Color.Transparent
-                            )
-                            .border(
-                                width = if (isSelected) 1.5.dp else 1.dp,
-                                color = if (isSelected) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.outline.copy(0.28f),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .clickable { onSelect(option.label) }
-                            .padding(vertical = 10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(option.emoji, fontSize = 18.sp)
-                        Text(
-                            option.label.split("-").first(),
-                            style      = MaterialTheme.typography.labelSmall,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            color      = if (isSelected) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurface,
-                            maxLines   = 1
-                        )
-                    }
-                }
-                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
-            }
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PURPOSE SELECTOR — 2 rows of 4, no external dependency
-// ─────────────────────────────────────────────────────────────────────────────
-
-private val purposeOptions = listOf(
-    "Work / Office", "Education", "Shopping", "Recreation",
-    "Medical", "Personal", "Return Home", "Other"
-)
-
-@Composable
-private fun PurposeSelector(selected: String, onSelect: (String) -> Unit) {
-    val rows = purposeOptions.chunked(4)
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        rows.forEach { row ->
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                row.forEach { option ->
-                    FilterChip(
-                        selected  = selected == option,
-                        onClick   = { onSelect(option) },
-                        label     = { Text(option, fontSize = 11.sp, maxLines = 1) },
-                        modifier  = Modifier.weight(1f),
-                        colors    = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(0.12f),
-                            selectedLabelColor     = MaterialTheme.colorScheme.primary
-                        )
-                    )
-                }
-                repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
-            }
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// COMPANIONS STEPPER
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-private fun CompanionsStepper(value: Int, onDecrease: () -> Unit, onIncrease: () -> Unit) {
-    Row(
-        modifier              = Modifier
-            .fillMaxWidth()
-            .border(1.dp, MaterialTheme.colorScheme.outline.copy(0.3f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment     = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        IconButton(onClick = onDecrease, enabled = value > 0) {
-            Icon(Icons.Default.Remove, null, tint = MaterialTheme.colorScheme.primary)
-        }
-        Text("$value", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-        IconButton(onClick = onIncrease) {
-            Icon(Icons.Default.Add, null, tint = MaterialTheme.colorScheme.primary)
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// COST FIELD
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-private fun CostField(value: String, onChange: (String) -> Unit) {
-    OutlinedTextField(
-        value           = value,
-        onValueChange   = onChange,
-        placeholder     = { Text("0.00") },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        singleLine      = true,
-        modifier        = Modifier.fillMaxWidth()
-    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
