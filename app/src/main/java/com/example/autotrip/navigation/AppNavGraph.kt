@@ -112,4 +112,9 @@ fun NavGraphBuilder.appNavGraph(
             tripsViewModel = tripsViewModel
         )
     }
+
+    composable("notifications") {
+        NotificationScreen(navController, authViewModel)
+    }
+
 }
