@@ -1,20 +1,33 @@
 package com.example.autotrip.viewmodel
 
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.autotrip.location.LocationProvider
-import com.example.autotrip.location.RealLocationProvider
-import com.example.autotrip.location.SimulatedLocationProvider
 import com.example.autotrip.model.Trip
 import com.example.autotrip.repository.FirebaseAuthRepository
 import com.example.autotrip.repository.TripRepository
+import com.example.autotrip.service.TrackingService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
+/**
+ * ViewModel for both real GPS tracking and simulation.
+ *
+ * Real tracking: delegates entirely to [TrackingService] (foreground service),
+ * binding to it so the UI gets live updates even after the user returns from
+ * the background. The service survives process-backgrounding; the ViewModel just
+ * mirrors its state.
+ *
+ * Simulation: unchanged — the SimulatedLocationProvider runs inside the ViewModel
+ * (simulations don't need background survival).
+ */
 class ActiveTrackingViewModel : ViewModel() {
 
     private val authRepo = FirebaseAuthRepository()
@@ -37,6 +50,10 @@ class ActiveTrackingViewModel : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
 
+    /** True while the service is bound and tracking is active */
+    private val _isTrackingActive = MutableStateFlow(false)
+    val isTrackingActive: StateFlow<Boolean> = _isTrackingActive
+
     sealed class SaveState {
         object Idle   : SaveState()
         object Saving : SaveState()
@@ -47,125 +64,185 @@ class ActiveTrackingViewModel : ViewModel() {
     private val _saveState = MutableStateFlow<SaveState>(SaveState.Idle)
     val saveState: StateFlow<SaveState> = _saveState
 
-    // ── Internal ──────────────────────────────────────────────────
+    // ── Service binding ───────────────────────────────────────────
 
-    private var provider     : LocationProvider?           = null
-    private var lastLocation : android.location.Location?  = null
-    private var totalDistM   = 0.0
-    private var startTimeMs  = 0L
-    private var isSimMode    = false
+    private var boundService  : TrackingService? = null
+    private var appContext    : Context?          = null
+    private var isBound       = false
 
-    /**
-     * Speed of the selected vehicle mode in km/h.
-     * Stored at simulation start so trip duration is calculated purely from math:
-     *   duration = distance / speed
-     * e.g. 6 km at 20 km/h = 18 minutes — no timer multiplication needed.
-     */
-    private var simSpeedKmh  = 0.0
-
-    // ── Public API ────────────────────────────────────────────────
-
-    fun startTracking(context: Context) {
-        resetState()
-        isSimMode           = false
-        _isSimulating.value = false
-        startWithProvider(RealLocationProvider(context))
+    private val stateListener: (TrackingService.TrackingState) -> Unit = { state ->
+        _distanceKm.value       = state.distanceKm
+        _speedKmh.value         = state.speedKmh
+        _routePoints.value      = state.routePoints
+        _isTrackingActive.value = state.isTracking
+        _isLoading.value        = state.routePoints.isEmpty() && state.isTracking
     }
 
-    fun startSimulation(provider: SimulatedLocationProvider, speedKmh: Double = 0.0) {
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            val service = (binder as TrackingService.LocalBinder).service
+            boundService = service
+            service.addListener(stateListener)
+            // Sync current state immediately (in case service was already tracking)
+            stateListener(service.state)
+            isBound = true
+        }
+        override fun onServiceDisconnected(name: ComponentName) {
+            boundService?.removeListener(stateListener)
+            boundService = null
+            isBound      = false
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Real GPS tracking — via foreground service
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Start the foreground tracking service and bind to it.
+     * Called once the user confirms origin + destination on the map picker.
+     */
+    fun startTracking(context: Context, origin: String = "", destination: String = "") {
+        appContext = context.applicationContext
         resetState()
-        isSimMode           = true
-        simSpeedKmh         = speedKmh
+        _isSimulating.value = false
+        _isLoading.value    = true
+
+        val intent = Intent(context, TrackingService::class.java).apply {
+            action = TrackingService.ACTION_START
+            putExtra(TrackingService.EXTRA_ORIGIN,      origin)
+            putExtra(TrackingService.EXTRA_DESTINATION, destination)
+        }
+        context.startForegroundService(intent)
+        context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+    }
+
+    /** Bind to an already-running service when the user returns to the app. */
+    fun bindToRunningService(context: Context) {
+        if (isBound) return
+        appContext = context.applicationContext
+        val intent = Intent(context, TrackingService::class.java)
+        context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+    }
+
+    /** Unbind without stopping (app going to background — service keeps running). */
+    fun unbindFromService(context: Context) {
+        if (isBound) {
+            boundService?.removeListener(stateListener)
+            context.unbindService(connection)
+            isBound = false
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Simulation — unchanged, runs entirely in-process
+    // ─────────────────────────────────────────────────────────────
+
+    private val legacyProvider = com.example.autotrip.location.LegacyProviderHolder()
+
+    fun startSimulation(
+        provider  : com.example.autotrip.location.SimulatedLocationProvider,
+        speedKmh  : Double = 0.0
+    ) {
+        resetState()
         _isSimulating.value = true
         _isLoading.value    = true
-        startWithProvider(provider)
-    }
-
-    private fun startWithProvider(p: LocationProvider) {
-        provider    = p
-        startTimeMs = System.currentTimeMillis()
-        p.startUpdates { loc -> onLocationReceived(loc) }
-    }
-
-    private fun onLocationReceived(loc: android.location.Location) {
-        // Guard: ignore callbacks that arrive after stopUpdates()
-        if (provider == null) return
-
-        if (_isLoading.value) _isLoading.value = false
-
-        lastLocation?.let { prev ->
-            val delta = prev.distanceTo(loc)
-            if (delta > 0.5f) {
-                totalDistM       += delta
-                _distanceKm.value = totalDistM / 1000.0
+        legacyProvider.simSpeedKmh  = speedKmh
+        legacyProvider.startTimeMs  = System.currentTimeMillis()
+        legacyProvider.provider     = provider
+        provider.startUpdates { loc ->
+            if (legacyProvider.isLoading) legacyProvider.isLoading = false
+            legacyProvider.lastLocation?.let { prev ->
+                val delta = prev.distanceTo(loc)
+                if (delta > 0.5f) {
+                    legacyProvider.totalDistM += delta
+                    _distanceKm.value          = legacyProvider.totalDistM / 1000.0
+                }
             }
+            legacyProvider.lastLocation = loc
+            if (loc.hasSpeed() && loc.speed > 0f) _speedKmh.value = loc.speed * 3.6
+            _routePoints.value = _routePoints.value + Pair(loc.latitude, loc.longitude)
+            if (_isLoading.value) _isLoading.value = false
         }
-        lastLocation = loc
-
-        if (loc.hasSpeed() && loc.speed > 0f) {
-            _speedKmh.value = loc.speed * 3.6
-        }
-
-        _routePoints.value = _routePoints.value + Pair(loc.latitude, loc.longitude)
     }
 
-    /**
-     * Stop tracking and save the trip.
-     *
-     * Time calculation:
-     *  - SIMULATION: duration = distance / vehicle speed  (pure math, no timer)
-     *      e.g. 6 km / 20 km/h = 0.3 h = 18 min = 1080 seconds
-     *  - REAL tracking: duration = wall-clock elapsed from the UI timer
-     *
-     * endTime is set as startTime + calculatedDuration so it is always accurate.
-     */
+    // ─────────────────────────────────────────────────────────────
+    // End trip
+    // ─────────────────────────────────────────────────────────────
+
     fun stopTrackingAndSave(origin: String, destination: String, elapsedUiSecs: Int) {
-        // Null out provider BEFORE calling stopUpdates so any in-flight callbacks
-        // hit the provider == null guard and return early — this prevents the freeze
-        val stoppedProvider = provider
-        provider = null
-        stoppedProvider?.stopUpdates()
-
-        val uid = authRepo.currentUser?.uid
-        if (uid == null) {
-            _saveState.value = SaveState.Error("Not logged in")
-            return
-        }
-
-        // Math-based duration for simulation; elapsed timer for real tracking
-        val realDurationSecs: Int = if (isSimMode && simSpeedKmh > 0.0) {
-            val distKm      = totalDistM / 1000.0
-            val travelHours = distKm / simSpeedKmh   // e.g. 6.0 / 20.0 = 0.3 hours
-            (travelHours * 3600).toInt()              // → seconds (e.g. 1080 = 18 min)
+        if (_isSimulating.value) {
+            stopSimulationAndSave(origin, destination, elapsedUiSecs)
         } else {
-            elapsedUiSecs
+            stopServiceAndSave(origin, destination, elapsedUiSecs)
+        }
+    }
+
+    private fun stopServiceAndSave(origin: String, destination: String, elapsedUiSecs: Int) {
+        val ctx = appContext ?: return
+
+        // Get final state snapshot from service BEFORE stopping
+        val finalState = boundService?.stopTracking()
+
+        // Unbind
+        if (isBound) {
+            try { ctx.unbindService(connection) } catch (_: Exception) {}
+            isBound = false
         }
 
-        // Reject genuinely empty trips
-        if (totalDistM < 50.0 && realDurationSecs < 10) {
-            _saveState.value = SaveState.Error("Trip too short to record")
-            return
-        }
+        val routePts   = finalState?.routePoints ?: _routePoints.value
+        val distKm     = finalState?.distanceKm  ?: _distanceKm.value
+        val durationS  = finalState?.elapsedSecs ?: elapsedUiSecs
 
-        val timeFmt   = SimpleDateFormat("h:mm a", Locale.getDefault())
+        saveTrip(origin, destination, distKm, durationS, routePts, isSimMode = false)
+    }
+
+    private fun stopSimulationAndSave(origin: String, destination: String, elapsedUiSecs: Int) {
+        val p = legacyProvider.provider
+        legacyProvider.provider = null
+        p?.stopUpdates()
+
+        val distKm    = legacyProvider.totalDistM / 1000.0
+        val simSpeed  = legacyProvider.simSpeedKmh
+        val durationS = if (simSpeed > 0.0) {
+            ((distKm / simSpeed) * 3600).toInt()
+        } else elapsedUiSecs
+
+        saveTrip(origin, destination, distKm, durationS, _routePoints.value, isSimMode = true)
+    }
+
+    private fun saveTrip(
+        origin      : String,
+        destination : String,
+        distKm      : Double,
+        durationS   : Int,
+        routePoints : List<Pair<Double, Double>>,
+        isSimMode   : Boolean
+    ) {
+        val uid = authRepo.currentUser?.uid
+        if (uid == null) { _saveState.value = SaveState.Error("Not logged in"); return }
+
+        val startMs = if (isSimMode) legacyProvider.startTimeMs else
+            (System.currentTimeMillis() - durationS * 1000L)
+
+        val timeFmt   = SimpleDateFormat("h:mm a",    Locale.getDefault())
         val dateFmt   = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val endTimeMs = startTimeMs + (realDurationSecs * 1000L)
+        val endTimeMs = startMs + (durationS * 1000L)
 
         val trip = Trip(
-            id           = "",
             origin       = origin,
             destination  = destination,
-            startTime    = timeFmt.format(Date(startTimeMs)),
+            startTime    = timeFmt.format(Date(startMs)),
             endTime      = timeFmt.format(Date(endTimeMs)),
             travelMode   = "",
             purpose      = "",
             companions   = 0,
             cost         = 0.0,
             status       = "Needs Info",
-            date         = dateFmt.format(Date(startTimeMs)),
-            distanceKm   = totalDistM / 1000.0,
-            durationSecs = realDurationSecs,
-            routePoints  = _routePoints.value.map { (lat, lng) -> "$lat,$lng" }
+            date         = dateFmt.format(Date(startMs)),
+            distanceKm   = distKm,
+            durationSecs = durationS,
+            routePoints  = routePoints.map { (lat, lng) -> "$lat,$lng" }
         )
 
         viewModelScope.launch {
@@ -178,24 +255,43 @@ class ActiveTrackingViewModel : ViewModel() {
         }
     }
 
-    /** Discard — stop provider without saving anything. */
     fun discardTrip() {
-        val stoppedProvider = provider
-        provider = null
-        stoppedProvider?.stopUpdates()
+        val ctx = appContext
+        if (ctx != null && !_isSimulating.value) {
+            // Stop the service completely
+            if (isBound) {
+                try { ctx.unbindService(connection) } catch (_: Exception) {}
+                isBound = false
+            }
+            ctx.stopService(Intent(ctx, TrackingService::class.java))
+        } else {
+            legacyProvider.provider?.stopUpdates()
+            legacyProvider.provider = null
+        }
         resetState()
-        _saveState.value = SaveState.Idle
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // Helpers
+    // ─────────────────────────────────────────────────────────────
+
     private fun resetState() {
-        lastLocation       = null
-        totalDistM         = 0.0
-        startTimeMs        = 0L
-        simSpeedKmh        = 0.0
-        _distanceKm.value  = 0.0
-        _speedKmh.value    = 0.0
-        _routePoints.value = emptyList()
-        _saveState.value   = SaveState.Idle
-        _isLoading.value   = false
+        _distanceKm.value       = 0.0
+        _speedKmh.value         = 0.0
+        _routePoints.value      = emptyList()
+        _isLoading.value        = false
+        _isTrackingActive.value = false
+        _saveState.value        = SaveState.Idle
+        legacyProvider.reset()
+    }
+
+    override fun onCleared() {
+        // ViewModel is destroyed (process killed) — unbind but leave service alive
+        appContext?.let { ctx ->
+            if (isBound) {
+                try { ctx.unbindService(connection) } catch (_: Exception) {}
+            }
+        }
+        super.onCleared()
     }
 }

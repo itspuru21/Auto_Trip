@@ -16,23 +16,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         setContent {
             AutoTripTheme {
                 val navController = rememberNavController()
-
-                // If a session already exists, skip onboarding and go straight to home.
-                // This is evaluated once at startup — same cost as before, just moved here.
                 val startDestination = if (authViewModel.isAlreadyLoggedIn) "home" else "onboarding"
-
-                NavHost(
-                    navController = navController,
-                    startDestination = startDestination
-                ) {
-                    appNavGraph(
-                        navController = navController,
-                        authViewModel = authViewModel
-                    )
+                NavHost(navController = navController, startDestination = startDestination) {
+                    appNavGraph(navController = navController, authViewModel = authViewModel)
                 }
             }
         }
