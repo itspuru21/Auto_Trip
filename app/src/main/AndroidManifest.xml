@@ -34,7 +34,7 @@
         </activity>
 
         <!-- Foreground service that keeps GPS running while app is in background -->
-        <!-- some changes for testing -->
+        <!-- some changes for  -->
         <service
             android:name=".service.TrackingService"
             android:foregroundServiceType="location"
