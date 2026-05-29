@@ -17,17 +17,6 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
-/**
- * ViewModel for both real GPS tracking and simulation.
- *
- * Real tracking: delegates entirely to [TrackingService] (foreground service),
- * binding to it so the UI gets live updates even after the user returns from
- * the background. The service survives process-backgrounding; the ViewModel just
- * mirrors its state.
- *
- * Simulation: unchanged — the SimulatedLocationProvider runs inside the ViewModel
- * (simulations don't need background survival).
- */
 class ActiveTrackingViewModel : ViewModel() {
 
     private val authRepo = FirebaseAuthRepository()
@@ -50,7 +39,6 @@ class ActiveTrackingViewModel : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
 
-    /** True while the service is bound and tracking is active */
     private val _isTrackingActive = MutableStateFlow(false)
     val isTrackingActive: StateFlow<Boolean> = _isTrackingActive
 
@@ -75,7 +63,17 @@ class ActiveTrackingViewModel : ViewModel() {
         _speedKmh.value         = state.speedKmh
         _routePoints.value      = state.routePoints
         _isTrackingActive.value = state.isTracking
-        _isLoading.value        = state.routePoints.isEmpty() && state.isTracking
+
+        // Loading is true only while tracking is active AND no GPS fix yet.
+        // Once we have at least one point the loading spinner goes away.
+        _isLoading.value = state.isTracking && state.routePoints.isEmpty()
+
+        // Handle the case where the user tapped "End Trip" in the notification
+        // while the app was in the foreground (or came back to foreground after).
+        // The service marks itself with stoppedByNotification; we must navigate.
+        if (state.stoppedByNotification && _saveState.value is SaveState.Idle) {
+            handleNotificationStop(state)
+        }
     }
 
     private val connection = object : ServiceConnection {
@@ -83,7 +81,7 @@ class ActiveTrackingViewModel : ViewModel() {
             val service = (binder as TrackingService.LocalBinder).service
             boundService = service
             service.addListener(stateListener)
-            // Sync current state immediately (in case service was already tracking)
+            // Sync immediately — covers the case where service was already running
             stateListener(service.state)
             isBound = true
         }
@@ -98,10 +96,6 @@ class ActiveTrackingViewModel : ViewModel() {
     // Real GPS tracking — via foreground service
     // ─────────────────────────────────────────────────────────────
 
-    /**
-     * Start the foreground tracking service and bind to it.
-     * Called once the user confirms origin + destination on the map picker.
-     */
     fun startTracking(context: Context, origin: String = "", destination: String = "") {
         appContext = context.applicationContext
         resetState()
@@ -117,7 +111,6 @@ class ActiveTrackingViewModel : ViewModel() {
         context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
     }
 
-    /** Bind to an already-running service when the user returns to the app. */
     fun bindToRunningService(context: Context) {
         if (isBound) return
         appContext = context.applicationContext
@@ -125,17 +118,17 @@ class ActiveTrackingViewModel : ViewModel() {
         context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
     }
 
-    /** Unbind without stopping (app going to background — service keeps running). */
     fun unbindFromService(context: Context) {
         if (isBound) {
             boundService?.removeListener(stateListener)
-            context.unbindService(connection)
-            isBound = false
+            try { context.unbindService(connection) } catch (_: IllegalArgumentException) {}
+            isBound      = false
+            boundService = null
         }
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Simulation — unchanged, runs entirely in-process
+    // Simulation — unchanged
     // ─────────────────────────────────────────────────────────────
 
     private val legacyProvider = com.example.autotrip.location.LegacyProviderHolder()
@@ -151,7 +144,6 @@ class ActiveTrackingViewModel : ViewModel() {
         legacyProvider.startTimeMs  = System.currentTimeMillis()
         legacyProvider.provider     = provider
         provider.startUpdates { loc ->
-            if (legacyProvider.isLoading) legacyProvider.isLoading = false
             legacyProvider.lastLocation?.let { prev ->
                 val delta = prev.distanceTo(loc)
                 if (delta > 0.5f) {
@@ -167,7 +159,7 @@ class ActiveTrackingViewModel : ViewModel() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // End trip
+    // End trip (dispatches to real or sim path)
     // ─────────────────────────────────────────────────────────────
 
     fun stopTrackingAndSave(origin: String, destination: String, elapsedUiSecs: Int) {
@@ -181,20 +173,21 @@ class ActiveTrackingViewModel : ViewModel() {
     private fun stopServiceAndSave(origin: String, destination: String, elapsedUiSecs: Int) {
         val ctx = appContext ?: return
 
-        // Get final state snapshot from service BEFORE stopping
+        // 1. Get final snapshot from service BEFORE touching the binding.
+        //    stopTracking() halts hardware but does NOT call stopSelf().
         val finalState = boundService?.stopTracking()
 
-        // Unbind
-        if (isBound) {
-            try { ctx.unbindService(connection) } catch (_: Exception) {}
-            isBound = false
-        }
+        // 2. Unbind. This is safe now because we already have the snapshot.
+        unbindFromService(ctx)
 
         val routePts   = finalState?.routePoints ?: _routePoints.value
         val distKm     = finalState?.distanceKm  ?: _distanceKm.value
         val durationS  = finalState?.elapsedSecs ?: elapsedUiSecs
 
-        saveTrip(origin, destination, distKm, durationS, routePts, isSimMode = false)
+        saveTrip(origin, destination, distKm, durationS, routePts, isSimMode = false) {
+            // 3. Only after saving, stop the service.
+            ctx.stopService(Intent(ctx, TrackingService::class.java))
+        }
     }
 
     private fun stopSimulationAndSave(origin: String, destination: String, elapsedUiSecs: Int) {
@@ -211,13 +204,37 @@ class ActiveTrackingViewModel : ViewModel() {
         saveTrip(origin, destination, distKm, durationS, _routePoints.value, isSimMode = true)
     }
 
+    /**
+     * Handle the case where "End Trip" was tapped in the notification while the
+     * service was bound to this ViewModel. The service has already saved the trip
+     * itself and written the tripId to SharedPreferences — we just need to clean up
+     * the binding and navigate.
+     */
+    private fun handleNotificationStop(state: TrackingService.TrackingState) {
+        val ctx = appContext ?: return
+        unbindFromService(ctx)
+        ctx.stopService(Intent(ctx, TrackingService::class.java))
+
+        // Read the tripId the service wrote to prefs
+        val prefs  = ctx.getSharedPreferences(TrackingService.PREFS_NAME, Context.MODE_PRIVATE)
+        val tripId = prefs.getString(TrackingService.KEY_PENDING_TRIP, null)
+        prefs.edit().remove(TrackingService.KEY_PENDING_TRIP).apply()
+
+        if (!tripId.isNullOrBlank()) {
+            _saveState.value = SaveState.Saved(tripId)
+        }
+        // If no tripId (e.g. save failed silently), leave saveState as Idle so
+        // the screen stays put rather than navigating to a blank trip.
+    }
+
     private fun saveTrip(
         origin      : String,
         destination : String,
         distKm      : Double,
         durationS   : Int,
         routePoints : List<Pair<Double, Double>>,
-        isSimMode   : Boolean
+        isSimMode   : Boolean,
+        onSaved     : (() -> Unit)? = null
     ) {
         val uid = authRepo.currentUser?.uid
         if (uid == null) { _saveState.value = SaveState.Error("Not logged in"); return }
@@ -248,21 +265,20 @@ class ActiveTrackingViewModel : ViewModel() {
         viewModelScope.launch {
             _saveState.value = SaveState.Saving
             val result = tripRepo.saveTrip(uid, trip)
-            _saveState.value = if (result.isSuccess)
+            _saveState.value = if (result.isSuccess) {
+                onSaved?.invoke()
                 SaveState.Saved(result.getOrNull()!!)
-            else
+            } else {
                 SaveState.Error(result.exceptionOrNull()?.message ?: "Save failed")
+            }
         }
     }
 
     fun discardTrip() {
         val ctx = appContext
         if (ctx != null && !_isSimulating.value) {
-            // Stop the service completely
-            if (isBound) {
-                try { ctx.unbindService(connection) } catch (_: Exception) {}
-                isBound = false
-            }
+            boundService?.stopTracking()   // halt hardware first
+            unbindFromService(ctx)
             ctx.stopService(Intent(ctx, TrackingService::class.java))
         } else {
             legacyProvider.provider?.stopUpdates()
@@ -270,10 +286,6 @@ class ActiveTrackingViewModel : ViewModel() {
         }
         resetState()
     }
-
-    // ─────────────────────────────────────────────────────────────
-    // Helpers
-    // ─────────────────────────────────────────────────────────────
 
     private fun resetState() {
         _distanceKm.value       = 0.0
@@ -286,10 +298,12 @@ class ActiveTrackingViewModel : ViewModel() {
     }
 
     override fun onCleared() {
-        // ViewModel is destroyed (process killed) — unbind but leave service alive
+        // ViewModel destroyed — unbind but leave service alive if still tracking
         appContext?.let { ctx ->
             if (isBound) {
-                try { ctx.unbindService(connection) } catch (_: Exception) {}
+                boundService?.removeListener(stateListener)
+                try { ctx.unbindService(connection) } catch (_: IllegalArgumentException) {}
+                isBound = false
             }
         }
         super.onCleared()
