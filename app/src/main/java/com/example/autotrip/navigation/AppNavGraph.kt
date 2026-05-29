@@ -66,7 +66,6 @@ fun NavGraphBuilder.appNavGraph(
     }
 
     // Simulated GPS tracking — all route params passed as path segments
-    // DevToolsScreen URL-encodes the name strings; decoded here
     composable(
         route = "active_tracking_sim/{originName}/{originLat}/{originLng}/{destName}/{destLat}/{destLng}/{mode}",
         arguments = listOf(
@@ -112,9 +111,4 @@ fun NavGraphBuilder.appNavGraph(
             tripsViewModel = tripsViewModel
         )
     }
-
-    composable("notifications") {
-        NotificationScreen(navController, authViewModel)
-    }
-//hello test
 }

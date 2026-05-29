@@ -6,12 +6,15 @@ import com.example.autotrip.simulation.SimMode
 import com.example.autotrip.simulation.SimPreset
 import kotlinx.coroutines.*
 import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.math.*
 
 /**
  * Simulates GPS movement along a REAL road route fetched from OSRM.
- * Falls back to straight-line interpolation if OSRM is unreachable.
+ * Tries multiple OSRM public endpoints before falling back to straight-line.
  *
  * Self-contained coroutine scope — never leaks into any ViewModel.
  * All callbacks are dispatched on Main so StateFlow updates are safe.
@@ -24,47 +27,78 @@ class SimulatedLocationProvider(
 
     companion object {
         private const val SPEED_MULTIPLIER = 10.0
-        private const val TICK_MS          = 500L   // 2 fixes/sec → smooth polyline
+        private const val TICK_MS          = 500L
         private const val WAYPOINT_SPACING = 10.0   // metres between densified points
-        private const val OSRM_BASE =
-            "https://router.project-osrm.org/route/v1/driving"
+        private const val CONNECT_TIMEOUT  = 8_000   // ms
+        private const val READ_TIMEOUT     = 10_000  // ms
+
+        // Multiple public OSRM endpoints — tries each in order
+        private val OSRM_ENDPOINTS = listOf(
+            "https://router.project-osrm.org/route/v1/driving",
+            "https://routing.openstreetmap.de/routed-car/route/v1/driving"
+        )
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     override fun startUpdates(onLocation: (Location) -> Unit) {
         scope.launch {
-            val waypoints = fetchOsrmRoute() ?: buildStraightLine()
+            val waypoints = fetchOsrmRouteWithRetry() ?: buildStraightLine()
             emitWaypoints(waypoints, onLocation)
         }
     }
 
     override fun stopUpdates() { scope.cancel() }
 
-    // ── OSRM real road route ──────────────────────────────────────
+    // ── OSRM real road route — tries multiple endpoints ───────────
 
-    private fun fetchOsrmRoute(): List<Pair<Double, Double>>? {
+    private fun fetchOsrmRouteWithRetry(): List<Pair<Double, Double>>? {
+        for (baseUrl in OSRM_ENDPOINTS) {
+            try {
+                val result = fetchFromEndpoint(baseUrl)
+                if (result != null && result.size > 2) return result
+            } catch (_: Exception) {
+                // Try next endpoint
+            }
+        }
+        return null
+    }
+
+    private fun fetchFromEndpoint(baseUrl: String): List<Pair<Double, Double>>? {
+        val urlString = "$baseUrl/${origin.lng},${origin.lat};" +
+                "${destination.lng},${destination.lat}" +
+                "?overview=full&geometries=geojson&steps=false"
+
+        val connection = URL(urlString).openConnection() as HttpURLConnection
+        connection.connectTimeout = CONNECT_TIMEOUT
+        connection.readTimeout    = READ_TIMEOUT
+        connection.requestMethod  = "GET"
+        connection.setRequestProperty("User-Agent", "AutoTripApp/1.0")
+
         return try {
-            val url = "$OSRM_BASE/${origin.lng},${origin.lat};" +
-                    "${destination.lng},${destination.lat}" +
-                    "?overview=full&geometries=geojson&steps=false"
+            val responseCode = connection.responseCode
+            if (responseCode != HttpURLConnection.HTTP_OK) return null
 
-            val json = URL(url).readText(Charsets.UTF_8)
-            val root = JSONObject(json)
+            val text = BufferedReader(InputStreamReader(connection.inputStream))
+                .use { it.readText() }
+
+            val root = JSONObject(text)
             if (root.getString("code") != "Ok") return null
 
             val coords = root
                 .getJSONArray("routes").getJSONObject(0)
                 .getJSONObject("geometry")
-                .getJSONArray("coordinates")   // each entry: [lng, lat]
+                .getJSONArray("coordinates")   // each: [lng, lat]
 
             val raw = (0 until coords.length()).map { i ->
                 val pt = coords.getJSONArray(i)
                 Pair(pt.getDouble(1), pt.getDouble(0))  // → (lat, lng)
             }
 
-            densify(raw, WAYPOINT_SPACING)
-        } catch (_: Exception) { null }
+            if (raw.size < 2) null else densify(raw, WAYPOINT_SPACING)
+        } finally {
+            connection.disconnect()
+        }
     }
 
     /** Insert evenly-spaced intermediate points so every tick is ~10 m. */
@@ -108,7 +142,6 @@ class SimulatedLocationProvider(
         val realSpeedMps = mode.avgSpeedKmh / 3.6
         val simSpeedMps  = realSpeedMps * SPEED_MULTIPLIER
         val tickSec      = TICK_MS / 1000.0
-        // Each waypoint ≈ WAYPOINT_SPACING metres apart
         val step = ((simSpeedMps * tickSec) / WAYPOINT_SPACING).toInt().coerceAtLeast(1)
 
         var idx = 0
@@ -161,11 +194,11 @@ class SimulatedLocationProvider(
 
     private fun bearingDeg(lat1: Double, lon1: Double,
                            lat2: Double, lon2: Double): Double {
-        val dLon  = Math.toRadians(lon2 - lon1)
-        val φ1    = Math.toRadians(lat1)
-        val φ2    = Math.toRadians(lat2)
-        val y     = sin(dLon) * cos(φ2)
-        val x     = cos(φ1) * sin(φ2) - sin(φ1) * cos(φ2) * cos(dLon)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val φ1   = Math.toRadians(lat1)
+        val φ2   = Math.toRadians(lat2)
+        val y    = sin(dLon) * cos(φ2)
+        val x    = cos(φ1) * sin(φ2) - sin(φ1) * cos(φ2) * cos(dLon)
         return (Math.toDegrees(atan2(y, x)) + 360) % 360
     }
 }
