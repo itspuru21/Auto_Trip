@@ -75,33 +75,33 @@ fun PermissionsScreen(
         PermissionItem(
             icon        = Icons.Default.LocationOn,
             title       = "Location Access",
-            description = "Allow background location to automatically detect trip start/end.",
+            description = "Allow background location to track start/end.",
             extra       = "Your location is anonymized and protected."
         )
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        PermissionItem(
-            icon        = Icons.Default.Notifications,
-            title       = "Notifications",
-            description = "Receive reminders when trip information is incomplete.",
-            extra       = "Helps keep your logs accurate."
-        )
+//        PermissionItem(
+//            icon        = Icons.Default.Notifications,
+//            title       = "Notifications",
+//            description = "Receive reminders when trip information is incomplete.",
+//            extra       = "Helps keep your logs accurate."
+//        )
 
-        Spacer(modifier = Modifier.height(40.dp))
+//        Spacer(modifier = Modifier.height(40.dp))
 
-        Text(
-            "Why these permissions?",
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium)
-        )
+//        Text(
+//            "Why these permissions?",
+//            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium)
+//        )
 
-        Spacer(modifier = Modifier.height(12.dp))
+//        Spacer(modifier = Modifier.height(12.dp))
 
-        BulletPoint("Automatic trip detection")
-        Spacer(modifier = Modifier.height(8.dp))
-        BulletPoint("More accurate start & end times")
-        Spacer(modifier = Modifier.height(8.dp))
-        BulletPoint("Smart nudges to complete trip details")
+//        BulletPoint("Automatic trip detection")
+//        Spacer(modifier = Modifier.height(8.dp))
+//        BulletPoint("More accurate start & end times")
+//        Spacer(modifier = Modifier.height(8.dp))
+//        BulletPoint("Smart nudges to complete trip details")
 
         Spacer(modifier = Modifier.weight(1f))
 
@@ -155,14 +155,14 @@ fun PermissionItem(icon: ImageVector, title: String, description: String, extra:
     }
 }
 
-@Composable
-fun BulletPoint(text: String) {
-    Row(verticalAlignment = Alignment.Top) {
-        Box(modifier = Modifier.size(8.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(text, fontSize = 14.sp)
-    }
-}
+//@Composable
+//fun BulletPoint(text: String) {
+//    Row(verticalAlignment = Alignment.Top) {
+//        Box(modifier = Modifier.size(8.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
+//        Spacer(modifier = Modifier.width(12.dp))
+//        Text(text, fontSize = 14.sp)
+//    }
+//}
 
 @Preview(showBackground = true, showSystemUi = true)
 @Composable
