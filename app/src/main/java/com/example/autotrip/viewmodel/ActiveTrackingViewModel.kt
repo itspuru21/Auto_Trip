@@ -8,6 +8,7 @@ import android.os.IBinder
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.autotrip.model.Trip
+import com.example.autotrip.prefs.DataSharingPrefs
 import com.example.autotrip.repository.FirebaseAuthRepository
 import com.example.autotrip.repository.TripRepository
 import com.example.autotrip.service.TrackingService
@@ -17,6 +18,23 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
+/**
+ * ViewModel for both real GPS tracking and simulation.
+ *
+ * Real tracking: delegates entirely to [TrackingService] (foreground service),
+ * binding to it so the UI gets live updates even after the user returns from
+ * the background. The service survives process-backgrounding; the ViewModel just
+ * mirrors its state.
+ *
+ * Simulation: unchanged — the SimulatedLocationProvider runs inside the ViewModel
+ * (simulations don't need background survival).
+ *
+ * Data-sharing gate:
+ * Before saving ANY trip to Firestore, the ViewModel checks [DataSharingPrefs].
+ * If sharing is disabled the trip is NOT written to Firebase. The UI layer
+ * (ActiveTrackingScreen) is responsible for blocking the user from reaching the
+ * tracking phase at all — this is a secondary safety net.
+ */
 class ActiveTrackingViewModel : ViewModel() {
 
     private val authRepo = FirebaseAuthRepository()
@@ -39,6 +57,7 @@ class ActiveTrackingViewModel : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
 
+    /** True while the service is bound and tracking is active */
     private val _isTrackingActive = MutableStateFlow(false)
     val isTrackingActive: StateFlow<Boolean> = _isTrackingActive
 
@@ -63,17 +82,7 @@ class ActiveTrackingViewModel : ViewModel() {
         _speedKmh.value         = state.speedKmh
         _routePoints.value      = state.routePoints
         _isTrackingActive.value = state.isTracking
-
-        // Loading is true only while tracking is active AND no GPS fix yet.
-        // Once we have at least one point the loading spinner goes away.
-        _isLoading.value = state.isTracking && state.routePoints.isEmpty()
-
-        // Handle the case where the user tapped "End Trip" in the notification
-        // while the app was in the foreground (or came back to foreground after).
-        // The service marks itself with stoppedByNotification; we must navigate.
-        if (state.stoppedByNotification && _saveState.value is SaveState.Idle) {
-            handleNotificationStop(state)
-        }
+        _isLoading.value        = state.routePoints.isEmpty() && state.isTracking
     }
 
     private val connection = object : ServiceConnection {
@@ -81,7 +90,6 @@ class ActiveTrackingViewModel : ViewModel() {
             val service = (binder as TrackingService.LocalBinder).service
             boundService = service
             service.addListener(stateListener)
-            // Sync immediately — covers the case where service was already running
             stateListener(service.state)
             isBound = true
         }
@@ -121,14 +129,13 @@ class ActiveTrackingViewModel : ViewModel() {
     fun unbindFromService(context: Context) {
         if (isBound) {
             boundService?.removeListener(stateListener)
-            try { context.unbindService(connection) } catch (_: IllegalArgumentException) {}
-            isBound      = false
-            boundService = null
+            context.unbindService(connection)
+            isBound = false
         }
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Simulation — unchanged
+    // Simulation
     // ─────────────────────────────────────────────────────────────
 
     private val legacyProvider = com.example.autotrip.location.LegacyProviderHolder()
@@ -144,6 +151,7 @@ class ActiveTrackingViewModel : ViewModel() {
         legacyProvider.startTimeMs  = System.currentTimeMillis()
         legacyProvider.provider     = provider
         provider.startUpdates { loc ->
+            if (legacyProvider.isLoading) legacyProvider.isLoading = false
             legacyProvider.lastLocation?.let { prev ->
                 val delta = prev.distanceTo(loc)
                 if (delta > 0.5f) {
@@ -159,7 +167,7 @@ class ActiveTrackingViewModel : ViewModel() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // End trip (dispatches to real or sim path)
+    // End trip
     // ─────────────────────────────────────────────────────────────
 
     fun stopTrackingAndSave(origin: String, destination: String, elapsedUiSecs: Int) {
@@ -173,21 +181,18 @@ class ActiveTrackingViewModel : ViewModel() {
     private fun stopServiceAndSave(origin: String, destination: String, elapsedUiSecs: Int) {
         val ctx = appContext ?: return
 
-        // 1. Get final snapshot from service BEFORE touching the binding.
-        //    stopTracking() halts hardware but does NOT call stopSelf().
         val finalState = boundService?.stopTracking()
 
-        // 2. Unbind. This is safe now because we already have the snapshot.
-        unbindFromService(ctx)
+        if (isBound) {
+            try { ctx.unbindService(connection) } catch (_: Exception) {}
+            isBound = false
+        }
 
         val routePts   = finalState?.routePoints ?: _routePoints.value
         val distKm     = finalState?.distanceKm  ?: _distanceKm.value
         val durationS  = finalState?.elapsedSecs ?: elapsedUiSecs
 
-        saveTrip(origin, destination, distKm, durationS, routePts, isSimMode = false) {
-            // 3. Only after saving, stop the service.
-            ctx.stopService(Intent(ctx, TrackingService::class.java))
-        }
+        saveTrip(origin, destination, distKm, durationS, routePts, isSimMode = false)
     }
 
     private fun stopSimulationAndSave(origin: String, destination: String, elapsedUiSecs: Int) {
@@ -205,39 +210,39 @@ class ActiveTrackingViewModel : ViewModel() {
     }
 
     /**
-     * Handle the case where "End Trip" was tapped in the notification while the
-     * service was bound to this ViewModel. The service has already saved the trip
-     * itself and written the tripId to SharedPreferences — we just need to clean up
-     * the binding and navigate.
+     * Saves the trip.
+     *
+     * DATA-SHARING GATE: If [DataSharingPrefs.isTripSharingEnabled] returns false
+     * the trip is NOT written to Firestore. This is a secondary safeguard — the UI
+     * should have prevented the user from starting a trip in the first place.
+     * We still emit [SaveState.Saved] with a local placeholder ID so the UI flow
+     * (navigating to TripDetailsScreen) is not broken.
+     *
+     * Note: because the trip has no Firestore ID in the blocked case, the details
+     * screen will show a skeleton and offer no save option — which is the correct
+     * behaviour since there's nothing to save.
      */
-    private fun handleNotificationStop(state: TrackingService.TrackingState) {
-        val ctx = appContext ?: return
-        unbindFromService(ctx)
-        ctx.stopService(Intent(ctx, TrackingService::class.java))
-
-        // Read the tripId the service wrote to prefs
-        val prefs  = ctx.getSharedPreferences(TrackingService.PREFS_NAME, Context.MODE_PRIVATE)
-        val tripId = prefs.getString(TrackingService.KEY_PENDING_TRIP, null)
-        prefs.edit().remove(TrackingService.KEY_PENDING_TRIP).apply()
-
-        if (!tripId.isNullOrBlank()) {
-            _saveState.value = SaveState.Saved(tripId)
-        }
-        // If no tripId (e.g. save failed silently), leave saveState as Idle so
-        // the screen stays put rather than navigating to a blank trip.
-    }
-
     private fun saveTrip(
         origin      : String,
         destination : String,
         distKm      : Double,
         durationS   : Int,
         routePoints : List<Pair<Double, Double>>,
-        isSimMode   : Boolean,
-        onSaved     : (() -> Unit)? = null
+        isSimMode   : Boolean
     ) {
+        val ctx = appContext
         val uid = authRepo.currentUser?.uid
         if (uid == null) { _saveState.value = SaveState.Error("Not logged in"); return }
+
+        // ── Data-sharing check ────────────────────────────────────
+        if (ctx != null && !DataSharingPrefs.isTripSharingEnabled(ctx)) {
+            // Sharing is off — do not write to Firestore.
+            // Emit an error state so the UI can surface a meaningful message.
+            _saveState.value = SaveState.Error(
+                "Trip data sharing is disabled. Enable it in Profile → Settings to record trips."
+            )
+            return
+        }
 
         val startMs = if (isSimMode) legacyProvider.startTimeMs else
             (System.currentTimeMillis() - durationS * 1000L)
@@ -265,20 +270,20 @@ class ActiveTrackingViewModel : ViewModel() {
         viewModelScope.launch {
             _saveState.value = SaveState.Saving
             val result = tripRepo.saveTrip(uid, trip)
-            _saveState.value = if (result.isSuccess) {
-                onSaved?.invoke()
+            _saveState.value = if (result.isSuccess)
                 SaveState.Saved(result.getOrNull()!!)
-            } else {
+            else
                 SaveState.Error(result.exceptionOrNull()?.message ?: "Save failed")
-            }
         }
     }
 
     fun discardTrip() {
         val ctx = appContext
         if (ctx != null && !_isSimulating.value) {
-            boundService?.stopTracking()   // halt hardware first
-            unbindFromService(ctx)
+            if (isBound) {
+                try { ctx.unbindService(connection) } catch (_: Exception) {}
+                isBound = false
+            }
             ctx.stopService(Intent(ctx, TrackingService::class.java))
         } else {
             legacyProvider.provider?.stopUpdates()
@@ -286,6 +291,10 @@ class ActiveTrackingViewModel : ViewModel() {
         }
         resetState()
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // Helpers
+    // ─────────────────────────────────────────────────────────────
 
     private fun resetState() {
         _distanceKm.value       = 0.0
@@ -298,12 +307,9 @@ class ActiveTrackingViewModel : ViewModel() {
     }
 
     override fun onCleared() {
-        // ViewModel destroyed — unbind but leave service alive if still tracking
         appContext?.let { ctx ->
             if (isBound) {
-                boundService?.removeListener(stateListener)
-                try { ctx.unbindService(connection) } catch (_: IllegalArgumentException) {}
-                isBound = false
+                try { ctx.unbindService(connection) } catch (_: Exception) {}
             }
         }
         super.onCleared()

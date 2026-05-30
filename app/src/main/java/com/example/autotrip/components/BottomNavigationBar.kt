@@ -58,7 +58,7 @@ fun BottomNavigationBar(
                 onClick = {
                     if (!isSelected) {
                         navController.navigate(item.route) {
-                            popUpTo(navController.graph.startDestinationId) {
+                            popUpTo("home") {
                                 saveState = true
                                 inclusive = false
                             }

@@ -9,6 +9,7 @@ import android.os.*
 import androidx.core.app.NotificationCompat
 import com.example.autotrip.MainActivity
 import com.example.autotrip.model.Trip
+import com.example.autotrip.prefs.DataSharingPrefs
 import com.example.autotrip.repository.FirebaseAuthRepository
 import com.example.autotrip.repository.TripRepository
 import com.google.android.gms.location.*
@@ -19,15 +20,15 @@ import java.util.*
 /**
  * Foreground service that keeps GPS tracking alive when the app is backgrounded.
  *
- * Stop paths:
+ * Two stop paths:
  *  A) UI calls stopTracking() via binder → returns final state to ViewModel → ViewModel saves.
- *     The ViewModel is responsible for calling unbindService AFTER it has the snapshot.
+ *  B) User taps "End Trip" in notification → ACTION_STOP → service saves trip itself
+ *     → writes tripId to SharedPreferences → MainActivity reads it on next open.
  *
- *  B) User taps "End Trip" in notification → ACTION_STOP intent → service saves trip itself,
- *     writes tripId to SharedPreferences → sets a "stopped by notification" flag so the
- *     bound ViewModel can react when it next polls / re-binds.
- *
- *  C) onTaskRemoved (user swiped app away) → saves the trip so data isn't lost silently.
+ * DATA-SHARING GATE (path B only):
+ * If [DataSharingPrefs.isTripSharingEnabled] is false, the trip is NOT written
+ * to Firestore even when the user taps the notification action. Path A is gated
+ * by [ActiveTrackingViewModel] instead.
  */
 class TrackingService : Service() {
 
@@ -54,15 +55,13 @@ class TrackingService : Service() {
     // ─────────────────────────────────────────────────────────────
 
     data class TrackingState(
-        val isTracking      : Boolean                    = false,
-        val distanceKm      : Double                     = 0.0,
-        val speedKmh        : Double                     = 0.0,
-        val elapsedSecs     : Int                        = 0,
-        val routePoints     : List<Pair<Double, Double>> = emptyList(),
-        val origin          : String                     = "",
-        val destination     : String                     = "",
-        // True when the notification "End Trip" button fired — ViewModel should navigate
-        val stoppedByNotification : Boolean              = false
+        val isTracking  : Boolean                    = false,
+        val distanceKm  : Double                     = 0.0,
+        val speedKmh    : Double                     = 0.0,
+        val elapsedSecs : Int                        = 0,
+        val routePoints : List<Pair<Double, Double>> = emptyList(),
+        val origin      : String                     = "",
+        val destination : String                     = ""
     )
 
     @Volatile private var _state = TrackingState()
@@ -142,7 +141,7 @@ class TrackingService : Service() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Path A — ViewModel-driven stop (app in foreground, End Trip button)
+    // Tracking control — path A (bound UI)
     // ─────────────────────────────────────────────────────────────
 
     @SuppressLint("MissingPermission")
@@ -177,45 +176,35 @@ class TrackingService : Service() {
         emitState()
     }
 
-    /**
-     * Called by ViewModel when the user taps "End Trip" while the app is visible.
-     * Returns a snapshot for the ViewModel to save — does NOT stop the service itself,
-     * since the ViewModel will unbind and then call stopService() after saving.
-     * This avoids the race condition where the service is destroyed before unbindService().
-     */
+    /** Called by ViewModel when app is in foreground. Returns snapshot for ViewModel to save. */
     fun stopTracking(): TrackingState {
-        val snapshot = _state.copy(isTracking = false)
+        val snapshot = _state
         stopHardware()
-        _state = snapshot
-        // Don't call stopForeground or stopSelf here — let ViewModel handle teardown
-        // after it finishes saving, by calling stopService() explicitly.
+        _state = snapshot.copy(isTracking = false)
         stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
         return snapshot
     }
 
-    /**
-     * Called by the ViewModel after it has finished saving the trip.
-     * Safe to call even if already stopped.
-     */
-    fun shutdownSelf() {
-        stopSelf()
-    }
-
     // ─────────────────────────────────────────────────────────────
-    // Path B — Notification "End Trip" button (app in background)
+    // Tracking control — path B (notification "End Trip" button)
     // ─────────────────────────────────────────────────────────────
 
     private fun saveAndStop() {
         val snapshot = _state
         stopHardware()
+        _state = snapshot.copy(isTracking = false)
         stopForeground(STOP_FOREGROUND_REMOVE)
-
-        // Emit a special state so any currently-bound ViewModel knows to navigate away
-        _state = snapshot.copy(isTracking = false, stoppedByNotification = true)
-        emitState()
 
         if (snapshot.distanceKm < 0.05 && snapshot.elapsedSecs < 10) {
             stopSelf(); return
+        }
+
+        // ── Data-sharing gate for notification path ───────────────
+        if (!DataSharingPrefs.isTripSharingEnabled(applicationContext)) {
+            // Sharing is disabled — discard silently and stop.
+            stopSelf()
+            return
         }
 
         serviceScope.launch {
@@ -242,61 +231,18 @@ class TrackingService : Service() {
                 routePoints  = snapshot.routePoints.map { (lat, lng) -> "$lat,$lng" }
             )
 
-            val result = TripRepository().saveTrip(uid, trip)
-            if (result.isSuccess) {
-                // Write tripId to SharedPreferences so MainActivity can pick it up on next resume
-                getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                    .edit()
-                    .putString(KEY_PENDING_TRIP, result.getOrNull())
-                    .apply()
-            }
+            TripRepository().saveTrip(uid, trip)
             stopSelf()
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Path C — User swiped app away (save so data isn't lost)
-    // ─────────────────────────────────────────────────────────────
-
     override fun onTaskRemoved(rootIntent: Intent?) {
-        val snapshot = _state
+        // User swiped the app away without tapping End Trip — discard silently
         stopHardware()
-        _state = snapshot.copy(isTracking = false)
+        _state = _state.copy(isTracking = false)
         stopForeground(STOP_FOREGROUND_REMOVE)
-
-        // Only save if a meaningful trip was recorded (>50m and >10s)
-        if (snapshot.distanceKm >= 0.05 && snapshot.elapsedSecs >= 10 && snapshot.isTracking) {
-            serviceScope.launch {
-                val uid = FirebaseAuthRepository().currentUser?.uid
-                if (uid != null) {
-                    val timeFmt   = SimpleDateFormat("h:mm a",    Locale.getDefault())
-                    val dateFmt   = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-                    val endTimeMs = startTimeMs + (snapshot.elapsedSecs * 1000L)
-
-                    val trip = Trip(
-                        origin       = snapshot.origin,
-                        destination  = snapshot.destination,
-                        startTime    = timeFmt.format(Date(startTimeMs)),
-                        endTime      = timeFmt.format(Date(endTimeMs)),
-                        travelMode   = "",
-                        purpose      = "",
-                        companions   = 0,
-                        cost         = 0.0,
-                        status       = "Needs Info",
-                        date         = dateFmt.format(Date(startTimeMs)),
-                        distanceKm   = snapshot.distanceKm,
-                        durationSecs = snapshot.elapsedSecs,
-                        routePoints  = snapshot.routePoints.map { (lat, lng) -> "$lat,$lng" }
-                    )
-                    TripRepository().saveTrip(uid, trip)
-                }
-                stopSelf()
-            }
-        } else {
-            serviceScope.cancel()
-            stopSelf()
-        }
-
+        serviceScope.cancel()
+        stopSelf()
         super.onTaskRemoved(rootIntent)
     }
 
@@ -350,15 +296,6 @@ class TrackingService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Tapping the notification body returns to the app
-        val openIntent = PendingIntent.getActivity(
-            this, 1,
-            Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
         val s    = _state
         val km   = "%.2f km".format(s.distanceKm)
         val mins = s.elapsedSecs / 60
@@ -369,7 +306,6 @@ class TrackingService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentTitle("🟢 ${s.origin} → ${s.destination}")
             .setContentText("$km  ·  $time")
-            .setContentIntent(openIntent)
             .setOngoing(true)
             .setSilent(true)
             .setOnlyAlertOnce(true)

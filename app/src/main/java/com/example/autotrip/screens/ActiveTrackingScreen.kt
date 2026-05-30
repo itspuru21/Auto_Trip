@@ -1,7 +1,10 @@
 package com.example.autotrip.screens
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -12,6 +15,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,6 +27,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -35,6 +40,7 @@ import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.autotrip.components.AutoTripTopBar
 import com.example.autotrip.location.SimulatedLocationProvider
+import com.example.autotrip.prefs.DataSharingPrefs
 import com.example.autotrip.simulation.SimMode
 import com.example.autotrip.simulation.SimPreset
 import com.example.autotrip.ui.theme.AutoTripTheme
@@ -58,7 +64,7 @@ import androidx.core.graphics.toColorInt
 // STATE
 // ─────────────────────────────────────────────────────────────────────────────
 
-private enum class TrackingPhase { MAP_PICK, TRACKING }
+private enum class TrackingPhase { SHARING_BLOCKED, MAP_PICK, TRACKING }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ENTRY POINTS
@@ -91,7 +97,24 @@ fun ActiveTrackingSimScreen(
     destLng       : Double,
     modeName      : String
 ) {
+    val context    = LocalContext.current
     val trackingVm: ActiveTrackingViewModel = viewModel()
+
+    // Check data sharing before starting simulation too
+    val sharingEnabled = remember { DataSharingPrefs.isTripSharingEnabled(context) }
+
+    if (!sharingEnabled) {
+        // Show the blocked screen instead of starting simulation
+        ActiveTrackingContent(
+            navController = navController,
+            authViewModel = authViewModel,
+            trackingVm    = trackingVm,
+            simOrigin     = originName,
+            simDest       = destName,
+            forceSharingBlocked = true
+        )
+        return
+    }
 
     LaunchedEffect(Unit) {
         val origin   = SimPreset(originName, originLat, originLng)
@@ -116,23 +139,55 @@ fun ActiveTrackingSimScreen(
 
 @Composable
 private fun ActiveTrackingContent(
-    navController : NavController,
-    authViewModel : AuthViewModel?,
-    trackingVm    : ActiveTrackingViewModel,
-    simOrigin     : String?,
-    simDest       : String?
+    navController       : NavController,
+    authViewModel       : AuthViewModel?,
+    trackingVm          : ActiveTrackingViewModel,
+    simOrigin           : String?,
+    simDest             : String?,
+    forceSharingBlocked : Boolean = false
 ) {
     val context        = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val isSimMode      = simOrigin != null
 
-    var phase       by remember { mutableStateOf(if (isSimMode) TrackingPhase.TRACKING else TrackingPhase.MAP_PICK) }
+    // Re-check data sharing pref on every composition (handles returning from settings)
+    var sharingEnabled by remember {
+        mutableStateOf(DataSharingPrefs.isTripSharingEnabled(context))
+    }
+    // Also refresh when screen resumes (user may have toggled in profile)
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                sharingEnabled = DataSharingPrefs.isTripSharingEnabled(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Determine initial phase
+    val initialPhase = when {
+        forceSharingBlocked || !sharingEnabled -> TrackingPhase.SHARING_BLOCKED
+        isSimMode                              -> TrackingPhase.TRACKING
+        else                                   -> TrackingPhase.MAP_PICK
+    }
+
+    var phase       by remember { mutableStateOf(initialPhase) }
     var origin      by remember { mutableStateOf(simOrigin ?: "") }
     var destination by remember { mutableStateOf(simDest ?: "") }
 
     val saveState    by trackingVm.saveState.collectAsState()
     val isSimulating by trackingVm.isSimulating.collectAsState()
     val isActive     by trackingVm.isTrackingActive.collectAsState()
+
+    // Update phase when sharing pref changes
+    LaunchedEffect(sharingEnabled) {
+        if (!sharingEnabled && phase != TrackingPhase.TRACKING) {
+            phase = TrackingPhase.SHARING_BLOCKED
+        } else if (sharingEnabled && phase == TrackingPhase.SHARING_BLOCKED) {
+            phase = if (isSimMode) TrackingPhase.TRACKING else TrackingPhase.MAP_PICK
+        }
+    }
 
     // If user returns to this screen and tracking is already running (came back from bg),
     // skip straight to the TRACKING phase
@@ -143,7 +198,6 @@ private fun ActiveTrackingContent(
     }
 
     // Bind/unbind service as the screen goes in and out of foreground
-    // (service keeps running regardless; we just connect/disconnect the listener)
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -190,12 +244,24 @@ private fun ActiveTrackingContent(
             AutoTripTopBar(
                 navController = navController,
                 currentRoute  = "active_tracking",
-                title         = if (isSimMode) "Simulation" else "Live Tracking",
+                title         = when (phase) {
+                    TrackingPhase.SHARING_BLOCKED -> "Trip Recording Paused"
+                    TrackingPhase.MAP_PICK        -> "New Trip"
+                    TrackingPhase.TRACKING        -> if (isSimMode) "Simulation" else "Live Tracking"
+                },
                 authViewModel = authViewModel
             )
         }
     ) { padding ->
         when (phase) {
+
+            // ── Sharing is OFF — show gate screen ─────────────────
+            TrackingPhase.SHARING_BLOCKED -> SharingBlockedScreen(
+                padding  = padding,
+                onGoBack = { navController.popBackStack() }
+            )
+
+            // ── Map picker ────────────────────────────────────────
             TrackingPhase.MAP_PICK -> MapPickPhase(
                 padding         = padding,
                 onDiscard       = { navController.popBackStack() },
@@ -212,6 +278,8 @@ private fun ActiveTrackingContent(
                     }
                 }
             )
+
+            // ── Active tracking ───────────────────────────────────
             TrackingPhase.TRACKING -> ActiveTrackingPhase(
                 padding      = padding,
                 origin       = origin,
@@ -227,6 +295,121 @@ private fun ActiveTrackingContent(
                     navController.popBackStack()
                 }
             )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARING BLOCKED SCREEN
+// Shown when the user has turned off "Share Anonymous Trip Data" in settings.
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun SharingBlockedScreen(
+    padding        : PaddingValues,
+    onGoBack       : () -> Unit
+) {
+    Box(
+        modifier         = Modifier
+            .fillMaxSize()
+            .padding(padding)
+            .padding(horizontal = 24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Icon
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.errorContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Block,
+                    contentDescription = null,
+                    tint     = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(44.dp)
+                )
+            }
+
+            Text(
+                "Trip Recording is Paused",
+                style      = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                textAlign  = TextAlign.Center
+            )
+
+            Text(
+                "You have disabled anonymous trip data sharing. " +
+                        "Trip recording is paused until you turn it back on.",
+                style     = MaterialTheme.typography.bodyMedium,
+                color     = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+
+            // Info card
+            Surface(
+                shape          = RoundedCornerShape(14.dp),
+                color          = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                modifier       = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        verticalAlignment     = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = null,
+                            tint     = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp).padding(top = 1.dp)
+                        )
+                        Text(
+                            "To re-enable trip recording, go to Profile → Settings → Privacy & Data " +
+                                    "and turn on \"Share Anonymous Trip Data\".",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                    Row(
+                        verticalAlignment     = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Shield,
+                            contentDescription = null,
+                            tint     = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp).padding(top = 1.dp)
+                        )
+                        Text(
+                            "Your personal profile information (name, demographics, etc.) " +
+                                    "is not affected by this setting.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // Go back button
+            OutlinedButton(
+                onClick  = onGoBack,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape    = RoundedCornerShape(14.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Go Back")
+            }
         }
     }
 }
@@ -380,10 +563,10 @@ private fun MapPickPhase(
 private fun PickerBanner(currentLocation: GeoPoint?, destPoint: GeoPoint?, fetchingLoc: Boolean) {
     data class BD(val bg: Color, val tint: Color, val msg: String, val icon: ImageVector)
     val d = when {
-        fetchingLoc          -> BD(Color(0xFF1565C0).copy(.08f), Color(0xFF1565C0), "Getting your current location…",                    Icons.Default.GpsFixed)
+        fetchingLoc             -> BD(Color(0xFF1565C0).copy(.08f), Color(0xFF1565C0), "Getting your current location…",                     Icons.Default.GpsFixed)
         currentLocation == null -> BD(Color(0xFFFF6F00).copy(.08f), Color(0xFFFF6F00), "Location unavailable — start auto-set when tracking begins", Icons.Default.LocationOff)
-        destPoint == null    -> BD(Color(0xFFD32F2F).copy(.07f),  Color(0xFFD32F2F), "Tap anywhere on the map to set your destination",  Icons.Default.TouchApp)
-        else                 -> BD(Color(0xFF2E7D32).copy(.08f),  Color(0xFF2E7D32), "Route ready — name your places and start tracking", Icons.Default.Check)
+        destPoint == null       -> BD(Color(0xFFD32F2F).copy(.07f), Color(0xFFD32F2F), "Tap anywhere on the map to set your destination",   Icons.Default.TouchApp)
+        else                    -> BD(Color(0xFF2E7D32).copy(.08f), Color(0xFF2E7D32), "Route ready — name your places and start tracking", Icons.Default.Check)
     }
     Surface(color = d.bg, modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -526,7 +709,6 @@ private fun ActiveTrackingPhase(
         )
         Spacer(Modifier.height(16.dp))
 
-        // Status dot
         Box(
             modifier = Modifier.size(56.dp).clip(CircleShape)
                 .background(
@@ -559,7 +741,6 @@ private fun ActiveTrackingPhase(
 
         Spacer(Modifier.height(20.dp))
 
-        // Route card
         Surface(
             modifier       = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             shape          = RoundedCornerShape(16.dp),

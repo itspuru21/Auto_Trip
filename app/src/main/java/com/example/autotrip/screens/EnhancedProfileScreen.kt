@@ -1,5 +1,8 @@
 package com.example.autotrip.screens
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -19,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -29,6 +33,7 @@ import androidx.navigation.compose.rememberNavController
 import com.example.autotrip.BuildConfig
 import com.example.autotrip.components.BottomNavigationBar
 import com.example.autotrip.model.EnhancedUserProfile
+import com.example.autotrip.prefs.DataSharingPrefs
 import com.example.autotrip.ui.theme.AutoTripTheme
 import com.example.autotrip.viewmodel.ProfileUiState
 import com.example.autotrip.viewmodel.ProfileViewModel
@@ -350,6 +355,14 @@ fun AdditionalSection(user: EnhancedUserProfile) {
 
 /* =====================================================================
    SETTINGS SECTION  (Tab 2)
+   ─────────────────────────────────────────────────────────────────────
+   Privacy & Data card:
+     • "Share Anonymous Trip Data" — when OFF, trip recording is blocked.
+       Only trip data is affected; personal profile data always syncs.
+
+   Permissions card:
+     • "Location Access" — tapping the toggle opens the system app-info
+       screen so the user can grant/revoke the permission manually.
 ===================================================================== */
 
 @Composable
@@ -357,52 +370,90 @@ fun SettingsSection(
     navController   : NavController,
     onDeleteAccount : () -> Unit
 ) {
-    var locationEnabled      by remember { mutableStateOf(true) }
-    var notificationsEnabled by remember { mutableStateOf(true) }
-    var anonymousDataEnabled by remember { mutableStateOf(true) }
-    var autoDetectTrips      by remember { mutableStateOf(true) }
+    val context = LocalContext.current
+
+    // ── Trip data sharing state (persisted in SharedPreferences) ──
+    var tripSharingEnabled by remember {
+        mutableStateOf(DataSharingPrefs.isTripSharingEnabled(context))
+    }
+
+    // ── Confirmation dialog state ──────────────────────────────────
+    var showDisableSharingDialog by remember { mutableStateOf(false) }
 
     Column(Modifier.padding(horizontal = 16.dp)) {
 
-        // --- Privacy & Data ---
+        // ── Privacy & Data ─────────────────────────────────────────
         SectionCard(title = "Privacy & Data", icon = Icons.Default.Shield) {
             SettingsToggleRow(
                 title           = "Share Anonymous Trip Data",
-                subtitle        = "Contribute anonymised data to NATPAC research",
-                checked         = anonymousDataEnabled,
-                onCheckedChange = { anonymousDataEnabled = it }
+                subtitle        = if (tripSharingEnabled)
+                    "Trip data is being contributed to NATPAC research"
+                else
+                    "Trip recording is PAUSED — turn on to record trips",
+                checked         = tripSharingEnabled,
+                tintWhenOff     = MaterialTheme.colorScheme.error,
+                onCheckedChange = { newValue ->
+                    if (!newValue) {
+                        // Turning OFF → show confirmation first
+                        showDisableSharingDialog = true
+                    } else {
+                        // Turning back ON → apply immediately
+                        tripSharingEnabled = true
+                        DataSharingPrefs.setTripSharingEnabled(context, true)
+                    }
+                }
             )
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            SettingsToggleRow(
-                title           = "Auto-Detect Trips",
-                subtitle        = "Automatically detect trip start and end in background",
-                checked         = autoDetectTrips,
-                onCheckedChange = { autoDetectTrips = it }
-            )
+
+            // Inline warning banner when sharing is off
+            AnimatedVisibility(visible = !tripSharingEnabled) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+                ) {
+                    Row(
+                        modifier          = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint     = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            "Trip recording is disabled. Enable the toggle above to start recording trips.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
+            }
         }
 
         Spacer(Modifier.height(12.dp))
 
-        // --- Permissions ---
+        // ── Permissions ────────────────────────────────────────────
         SectionCard(title = "Permissions", icon = Icons.Default.Security) {
-            SettingsToggleRow(
-                title           = "Location Access",
-                subtitle        = "Required for automatic trip detection",
-                checked         = locationEnabled,
-                onCheckedChange = { locationEnabled = it }
-            )
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            SettingsToggleRow(
-                title           = "Notifications",
-                subtitle        = "Reminders to complete incomplete trip details",
-                checked         = notificationsEnabled,
-                onCheckedChange = { notificationsEnabled = it }
+            // Tapping this toggle (either direction) always opens system settings.
+            // The actual permission state is managed by Android, not by us.
+            LocationPermissionRow(
+                onOpenSettings = {
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data  = Uri.fromParts("package", context.packageName, null)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    context.startActivity(intent)
+                }
             )
         }
 
         Spacer(Modifier.height(12.dp))
 
-        // --- About ---
+        // ── About ──────────────────────────────────────────────────
         SectionCard(title = "About", icon = Icons.Default.Info) {
             InfoRow("App Version",       "1.0.0")
             InfoRow("Data Partner",      "NATPAC")
@@ -411,7 +462,7 @@ fun SettingsSection(
 
         Spacer(Modifier.height(12.dp))
 
-        // --- Developer Tools (debug builds only) ---
+        // ── Developer Tools (debug builds only) ───────────────────
         if (BuildConfig.DEBUG) {
             SectionCard(title = "Developer", icon = Icons.Default.BugReport) {
                 Row(
@@ -445,7 +496,7 @@ fun SettingsSection(
             Spacer(Modifier.height(12.dp))
         }
 
-        // --- Account / Danger Zone ---
+        // ── Account / Danger Zone ──────────────────────────────────
         SectionCard(title = "Account", icon = Icons.Default.ManageAccounts) {
             Text(
                 "Deleting your account is permanent. All your trip data and profile information " +
@@ -468,6 +519,118 @@ fun SettingsSection(
                 Text("Delete My Account")
             }
         }
+    }
+
+    // ── Confirmation dialog: disable trip data sharing ─────────────
+    if (showDisableSharingDialog) {
+        AlertDialog(
+            onDismissRequest = { showDisableSharingDialog = false },
+            icon  = {
+                Icon(
+                    Icons.Default.Warning,
+                    contentDescription = null,
+                    tint     = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(28.dp)
+                )
+            },
+            title = { Text("Disable Trip Data Sharing?", fontWeight = FontWeight.Bold) },
+            text  = {
+                Text(
+                    "Your trip data will no longer be contributed to NATPAC research.\n\n" +
+                            "Trip recording will be paused — you won't be able to start a new trip until " +
+                            "you turn this back on.\n\n" +
+                            "Your personal profile information will continue to be stored normally.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        tripSharingEnabled = false
+                        DataSharingPrefs.setTripSharingEnabled(context, false)
+                        showDisableSharingDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("Disable & Pause Trips") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDisableSharingDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+/* =====================================================================
+   LOCATION PERMISSION ROW
+   Always opens Android system app-info when toggled/tapped.
+   Reads the current runtime permission state to show an accurate label.
+===================================================================== */
+
+@Composable
+private fun LocationPermissionRow(onOpenSettings: () -> Unit) {
+    val context = LocalContext.current
+
+    // Re-check permission state every time the composition runs (e.g. after returning
+    // from system settings). A DisposableEffect on lifecycle would be cleaner but this
+    // is sufficient for the settings page which is not hot-reloaded constantly.
+    val hasPermission = remember {
+        mutableStateOf(
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.ACCESS_FINE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    // Refresh when the screen is re-entered (user comes back from settings)
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                hasPermission.value =
+                    androidx.core.content.ContextCompat.checkSelfPermission(
+                        context,
+                        android.Manifest.permission.ACCESS_FINE_LOCATION
+                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    Row(
+        modifier              = Modifier.fillMaxWidth(),
+        verticalAlignment     = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(
+                "Location Access",
+                style      = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                if (hasPermission.value)
+                    "Granted — tap to manage in system settings"
+                else
+                    "Not granted — tap to enable in system settings",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (hasPermission.value)
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                else
+                    MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
+            )
+        }
+        Switch(
+            checked         = hasPermission.value,
+            onCheckedChange = { onOpenSettings() },   // always goes to system settings
+            colors          = SwitchDefaults.colors(
+                uncheckedThumbColor  = MaterialTheme.colorScheme.error,
+                uncheckedTrackColor  = MaterialTheme.colorScheme.errorContainer
+            )
+        )
     }
 }
 
@@ -778,12 +941,18 @@ fun InfoRow(label: String, value: String) {
     }
 }
 
+/**
+ * Toggle row used in Settings cards.
+ * [tintWhenOff] optionally colours the switch track red when unchecked,
+ * so the user sees a visual warning (used for the data-sharing toggle).
+ */
 @Composable
 fun SettingsToggleRow(
     title           : String,
     subtitle        : String,
     checked         : Boolean,
-    onCheckedChange : (Boolean) -> Unit
+    onCheckedChange : (Boolean) -> Unit,
+    tintWhenOff     : Color = MaterialTheme.colorScheme.onSurfaceVariant
 ) {
     Row(
         modifier              = Modifier.fillMaxWidth(),
@@ -793,9 +962,19 @@ fun SettingsToggleRow(
         Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
             Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
             Text(subtitle, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f))
+                color = if (!checked) tintWhenOff.copy(alpha = 0.75f)
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f))
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(
+            checked         = checked,
+            onCheckedChange = onCheckedChange,
+            colors          = SwitchDefaults.colors(
+                uncheckedThumbColor  = if (tintWhenOff != MaterialTheme.colorScheme.onSurfaceVariant)
+                    tintWhenOff else MaterialTheme.colorScheme.outline,
+                uncheckedTrackColor  = if (tintWhenOff != MaterialTheme.colorScheme.onSurfaceVariant)
+                    tintWhenOff.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant
+            )
+        )
     }
 }
 
