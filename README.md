@@ -152,7 +152,7 @@ You can test the application in two ways:
 
 | Onboarding & Auth | Active GPS Tracking | Trip Summary & Edit |
 | :---: | :---: | :---: |
-| ![Onboarding Screen](docs/screenshots/onboarding.jpg) | ![Active Tracking](docs/screenshots/tracking.jpg) | ![Trip Details](docs/screenshots/trip_details.jpg) |
+| ![Onboarding Screen](docs/screenshots/login_page.jpg) | ![Active Tracking](docs/screenshots/tracking.jpg) | ![Trip Details](docs/screenshots/trip_details.jpg) |
 
 | User Profile & NATPAC Fields | Weekly Trip History | Developer GPS Simulator |
 | :---: | :---: | :---: |
