@@ -148,6 +148,29 @@ You can test the application in two ways:
 - Data Isolation: User trip subcollections are secured under users/{uid}/trips[cite: 1].
 - Account Deletion: Permanent account erasure wipes both Firestore profile records and Firebase Auth credentials[cite: 1].
 
+## 📱 Application Screenshots
+
+| Onboarding & Auth | Active GPS Tracking | Trip Summary & Edit |
+| :---: | :---: | :---: |
+| ![Onboarding Screen](docs/screenshots/onboarding.png) | ![Active Tracking](docs/screenshots/tracking.png) | ![Trip Details](docs/screenshots/trip_details.png) |
+
+| User Profile & NATPAC Fields | Weekly Trip History | Developer GPS Simulator |
+| :---: | :---: | :---: |
+| ![Profile](docs/screenshots/profile.png) | ![My Trips](docs/screenshots/my_trips.png) | ![GPS Simulation](docs/screenshots/simulation.png) |
+
+---
+
+## 🖥️ Research & Admin Dashboard
+
+The web dashboard enables NATPAC transportation planners to visualize aggregated spatial mobility patterns, inspect real-time modal shares, and export filtered datasets.
+
+| Spatial Trip Map | Modal Share & Analytics | Filterable Data Grid |
+| :---: | :---: | :---: |
+| ![Admin Map](docs/screenshots/admin_map.png) | ![Analytics](docs/screenshots/admin_analytics.png) | ![Data Grid](docs/screenshots/admin_grid.png) |
+
+
+
+
 # 👥 Authors & Academic Attribution
 - Project: AutoTrip — Travel Behaviour Data Collection System[cite: 1]
 - Collaborator / Research Partner: NATPAC (National Transportation Planning and Research Centre)[cite: 1]
