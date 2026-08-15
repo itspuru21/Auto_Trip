@@ -63,21 +63,31 @@ Auto_Trip/
 │   └── build.gradle.kts
 ├── gradle/
 └── README.md
+t```
 
 ----------------------------------------------------------------------------------------------------------------------------------------------
+# 🚀 Want to run it yourself?
 
-🚀 Getting Started
-Prerequisites
-1. Android Studio Ladybug (or later)
-2. JDK 17+
-3. Android device or emulator running Android 12 (API level 31) or higher
-4. A configured Firebase Project with Authentication and Firestore enabled
+Follow these steps to set up, build, and run the **AutoTrip** Android application on your local machine.
 
-Installation & Setup
+---
 
-1. Clone the repository:
-```
+## 📋 Prerequisites
+
+Before you begin, ensure you have the following installed:
+
+- **Android Studio Ladybug** (or later version)
+- **JDK 17+** (configured in your IDE)
+- **Git** installed on your machine
+- An Android device or emulator running **Android 12 (API level 31)** or higher
+- A **Google Firebase** account
+
+---
+
+## 🛠️ Step-by-Step Setup Instructions
+
+### 1. Clone the Repository
+Open your terminal or command prompt and clone this repository:
+```bash
 git clone [https://github.com/itspuru21/Auto_Trip.git](https://github.com/itspuru21/Auto_Trip.git)
 cd Auto_Trip
-```
-2.
