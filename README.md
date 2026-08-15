@@ -132,7 +132,14 @@ You can test the application in two ways:
 
 # 📊 Comparison with Existing Survey Systems
 
+
 | Parameter | Traditional Manual Survey | MoveSmarter (Europe) | AutoTrip (Proposed) |
-| --------  | --------------------------| -------------------- | ------------------- |
-| Trip Detection | Manual recall by respondent | Automatic GPS + Sensor fusion | Automatic GPS via Foreground Service |
-| Data Accuracy | Low (High recall bias) | High | High (GPS + Prompted user confirmation) |
+| :--- | :--- | :--- | :--- |
+| **Trip Detection** | Manual recall by respondent PDF | Automatic GPS + Sensor fusion PDF | Automatic GPS via Foreground Service PDF |
+| **Data Accuracy** | Low (High recall bias) PDF | High PDF | High (GPS + Prompted user confirmation) PDF |
+| **Route Capture** | Not captured | Full GPS polyline | Full GPS breadcrumb trail + Map replay |
+| **Indian Transit Modes** | Covered manually | Not covered | Auto, Two-Wheeler, Bus, Car, Walk, Bike |
+| **NATPAC Research Fields** | Custom paper forms | Partial / Generic only | Fully covered (Cost, Companions, Residence) |
+| **Real-Time Cloud Sync** | No (Periodic manual entry) | Periodic batch sync | Real-time Firestore snapshot streams |
+| **Testing Utility** | N/A | No simulator | Built-in OSRM 10x Road Simulator |
+
