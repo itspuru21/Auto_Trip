@@ -156,7 +156,7 @@ You can test the application in two ways:
 
 | User Profile & NATPAC Fields | Weekly Trip History | Developer GPS Simulator |
 | :---: | :---: | :---: |
-| ![Profile](docs/screenshots/profile.jpg) | ![My Trips](docs/screenshots/my_trips.jpg) | ![GPS Simulation](docs/screenshots/simulation.png) |
+| ![Profile](docs/screenshots/profile.jpg) | ![My Trips](docs/screenshots/my_trips.jpg) | ![GPS Simulation](docs/screenshots/simulation.jpg) |
 
 ---
 
@@ -179,10 +179,9 @@ Prompted Recall Notification        users/{uid}/trips
 (Mode, Purpose, Companions, Cost)
 
 ### Architecture & Data Flow Diagrams
-- **System Architecture:** Detailed client-server structure running on Android and Google Cloud Firestore.
-- **Component & Deployment Diagrams:**
+- **Sequence Diagram:**
   <p align="center">
-    <img src="docs/diagrams/system_architecture.png" alt="System Architecture Diagram" width="700"/>
+    <img src="docs/diagrams/sequence.jpg" alt="Sequence Diagram" width="700"/>
   </p>
 
 ## 📄 Sample Trip Output (Firestore Document)
