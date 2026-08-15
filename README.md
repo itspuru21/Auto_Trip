@@ -65,11 +65,11 @@ Auto_Trip/
 └── README.md
 ```
 
-#🚀 Want to run it yourself?
+# 🚀 Want to run it yourself?
 
 Follow these steps to set up, build, and run the AutoTrip Android application on your local machine.
 
-##📋 Prerequisites
+## 📋 Prerequisites
 Before you begin,ensure you have the following installed:
 - Android Studio Ladybug (or later)  
 - JDK 17+ (configured in your IDE)
@@ -77,15 +77,15 @@ Before you begin,ensure you have the following installed:
 - An Android physical device or emulator running Android 12 (API level 31) or higher  
 - A Google Firebase account
 
-##🛠️ Step-by-Step Setup Instructions
-###1. Clone the Repository
+## 🛠️ Step-by-Step Setup Instructions
+### 1. Clone the Repository
 Open your terminal or command prompt and clone this repository:
 ```
 git clone [https://github.com/itspuru21/Auto_Trip.git](https://github.com/itspuru21/Auto_Trip.git)
 cd Auto_Trip
 ```
 
-###2. Set Up Firebase Configuration
+### 2. Set Up Firebase Configuration
 AutoTrip relies on Firebase Authentication and Cloud Firestore.
 
 - Go to the Firebase Console and create a new project.
@@ -99,3 +99,31 @@ Auto_Trip/
 └── app/
     └── google-services.json
 ```
+### 3. Open and Sync the Project in Android Studio
+- Launch Android Studio.
+- Select Open and choose the cloned `Auto_Trip` directory.
+- Allow Gradle to sync all dependencies and build configurations (`Gradle 8.13, Kotlin 2.0.21`, Jetpack Compose libraries).
+
+### 4. Build and Run the Application
+- Connect a physical Android device via USB (with USB Debugging enabled) or launch an Android Emulator (`API level 31+`).
+- Click the green Run (`▶`) button in Android Studio, or execute via terminal:
+```
+# Build Debug APK
+./gradlew assembleDebug
+
+# Install directly to connected device
+./gradlew installDebug
+```
+
+### 5. Test Live Tracking vs. GPS Simulation
+You can test the application in two ways:
+- Real Movement Tracking:
+    - Launch the app and grant the required Location & Notification permissions.  
+    - Tap New Trip $\rightarrow$ select your destination on the OSM map $\rightarrow$ tap Start Tracking.
+    - Move around to see real-time distance accumulation and speed metrics via the persistent foreground service.
+- Developer GPS Simulator (No physical movement needed):
+    - Ensure you are running the `debug` build.
+    - Go to Profile ➔ Settings ➔ Developer Tools.
+    - Tap the map to drop a Start Pin (Green) and an End Pin (Red).
+    - Choose a vehicle mode (Car, Bus, Auto-Rickshaw, Bike, etc.) and tap Start Simulation.
+    - The app will fetch real road coordinates from the OSRM API and simulate the journey at 10x speed while writing real-world duration and distance data to Firestore.
