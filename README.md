@@ -163,10 +163,18 @@ You can test the application in two ways:
 ## 🖥️ Research & Admin Dashboard
 
 The web dashboard enables NATPAC transportation planners to visualize aggregated spatial mobility patterns, inspect real-time modal shares, and export filtered datasets.
-
-| Spatial Trip Map | Modal Share & Analytics | Filterable Data Grid |
-| :---: | :---: | :---: |
-| ![Admin Map](docs/screenshots/admin_map.png) | ![Analytics](docs/screenshots/admin_analytics.png) | ![Data Grid](docs/screenshots/admin_grid.png) |
+- **Spatial Trip Map:**
+  <p align="center">
+    <img src="docs/screenshots/admin_map.png" alt="admin map" width="700"/>
+  </p>
+- **Modal Share & Annalytics:**
+  <p align="center">
+    <img src="docs/screenshots/admin_analytics.png" alt="admin analytics" width="700"/>
+  </p>
+- **Filterable Data Grid:**
+  <p align="center">
+    <img src="docs/screenshots/admin_grid.png" alt="admin grid" width="700"/>
+  </p>
 
 ## 🏗️ System Architecture & Workflow
 ### Sense-Confirm-Sync Pipeline
