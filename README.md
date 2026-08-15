@@ -129,3 +129,10 @@ You can test the application in two ways:
     - The app will fetch real road coordinates from the OSRM API and simulate the journey at 10x speed while writing real-world duration and distance data to Firestore.
 
 ----------------------------------------------------------------------------------------------------------------------------------------------
+
+# 📊 Comparison with Existing Survey Systems
+
+| Parameter | Traditional Manual Survey | MoveSmarter (Europe) | AutoTrip (Proposed) |
+| --------  | --------------------------| -------------------- | ------------------- |
+| Trip Detection | Manual recall by respondent | Automatic GPS + Sensor fusion | Automatic GPS via Foreground Service |
+| Data Accuracy | Low (High recall bias) | High | High (GPS + Prompted user confirmation) |
