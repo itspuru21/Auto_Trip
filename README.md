@@ -143,3 +143,15 @@ You can test the application in two ways:
 | **Real-Time Cloud Sync** | No (Periodic manual entry) | Periodic batch sync | Real-time Firestore snapshot streams |
 | **Testing Utility** | N/A | No simulator | Built-in OSRM 10x Road Simulator |
 
+# 🔒 Privacy & Data Handling
+- Fine-Grained Permissions: Toggle anonymous research sharing with NATPAC or background auto-detection directly from the Settings tab[cite: 1].
+- Data Isolation: User trip subcollections are secured under users/{uid}/trips[cite: 1].
+- Account Deletion: Permanent account erasure wipes both Firestore profile records and Firebase Auth credentials[cite: 1].
+
+# 👥 Authors & Academic Attribution
+- Project: AutoTrip — Travel Behaviour Data Collection System[cite: 1]
+- Collaborator / Research Partner: NATPAC (National Transportation Planning and Research Centre)[cite: 1]
+- Department: Department of Computer Science and Engineering[cite: 1]
+
+# 📄 License
+***Distributed under the MIT License (or institutional research license where applicable).***
