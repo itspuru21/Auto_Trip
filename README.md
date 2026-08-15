@@ -211,10 +211,7 @@ Each validated journey is stored under the path `users/{uid}/trips/{tripId}` wit
     "8.5301,76.9421"
   ]
 }
-
-
-
-
+```
 
 # 👥 Authors & Academic Attribution
 - Project: AutoTrip — Travel Behaviour Data Collection System[cite: 1]
