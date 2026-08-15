@@ -150,9 +150,9 @@ You can test the application in two ways:
 
 ## 📱 Application Screenshots
 
-| Onboarding & Auth | Active GPS Tracking | Trip Summary & Edit |
-| :---: | :---: | :---: |
-| ![Onboarding Screen](docs/screenshots/login_page.jpg) | ![Active Tracking](docs/screenshots/tracking.jpg) | ![Trip Details](docs/screenshots/trip_details.jpg) |
+| Active GPS Tracking | Trip Summary & Edit |
+| :---: | :---: |
+| ![Active Tracking](docs/screenshots/tracking.jpg) | ![Trip Details](docs/screenshots/trip_details.jpg) |
 
 | User Profile & NATPAC Fields | Weekly Trip History | Developer GPS Simulator |
 | :---: | :---: | :---: |
