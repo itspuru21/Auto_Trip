@@ -127,3 +127,5 @@ You can test the application in two ways:
     - Tap the map to drop a Start Pin (Green) and an End Pin (Red).
     - Choose a vehicle mode (Car, Bus, Auto-Rickshaw, Bike, etc.) and tap Start Simulation.
     - The app will fetch real road coordinates from the OSRM API and simulate the journey at 10x speed while writing real-world duration and distance data to Firestore.
+
+----------------------------------------------------------------------------------------------------------------------------------------------
