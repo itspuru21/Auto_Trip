@@ -63,31 +63,39 @@ Auto_Trip/
 │   └── build.gradle.kts
 ├── gradle/
 └── README.md
-t```
+```
 
-----------------------------------------------------------------------------------------------------------------------------------------------
-# 🚀 Want to run it yourself?
+#🚀 Want to run it yourself?
 
-Follow these steps to set up, build, and run the **AutoTrip** Android application on your local machine.
+Follow these steps to set up, build, and run the AutoTrip Android application on your local machine.
 
----
+##📋 Prerequisites
+Before you begin,ensure you have the following installed:
+- Android Studio Ladybug (or later)  
+- JDK 17+ (configured in your IDE)
+- Git installed on your system
+- An Android physical device or emulator running Android 12 (API level 31) or higher  
+- A Google Firebase account
 
-## 📋 Prerequisites
-
-Before you begin, ensure you have the following installed:
-
-- **Android Studio Ladybug** (or later version)
-- **JDK 17+** (configured in your IDE)
-- **Git** installed on your machine
-- An Android device or emulator running **Android 12 (API level 31)** or higher
-- A **Google Firebase** account
-
----
-
-## 🛠️ Step-by-Step Setup Instructions
-
-### 1. Clone the Repository
+##🛠️ Step-by-Step Setup Instructions
+###1. Clone the Repository
 Open your terminal or command prompt and clone this repository:
-```bash
+```
 git clone [https://github.com/itspuru21/Auto_Trip.git](https://github.com/itspuru21/Auto_Trip.git)
 cd Auto_Trip
+```
+
+###2. Set Up Firebase Configuration
+AutoTrip relies on Firebase Authentication and Cloud Firestore.
+
+- Go to the Firebase Console and create a new project.
+- Register an Android app using your package name.
+- Enable Email/Password under Authentication > Sign-in method.
+- Enable Cloud Firestore and configure database security rules for user subcollections (users/{uid}).
+- Download your generated google-services.json file.
+- Place google-services.json into your local app/ directory:
+```
+Auto_Trip/
+└── app/
+    └── google-services.json
+```
