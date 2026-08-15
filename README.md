@@ -168,6 +168,51 @@ The web dashboard enables NATPAC transportation planners to visualize aggregated
 | :---: | :---: | :---: |
 | ![Admin Map](docs/screenshots/admin_map.png) | ![Analytics](docs/screenshots/admin_analytics.png) | ![Data Grid](docs/screenshots/admin_grid.png) |
 
+## 🏗️ System Architecture & Workflow
+### Sense-Confirm-Sync Pipeline
+
+[Android Client]                     [Firebase Cloud]              [NATPAC Portal]
+TrackingService (Foreground GPS) ──> Firestore Database ──────────> Web Analytics
+│                                  │
+▼                                  ▼
+Prompted Recall Notification        users/{uid}/trips
+(Mode, Purpose, Companions, Cost)
+
+### Architecture & Data Flow Diagrams
+- **System Architecture:** Detailed client-server structure running on Android and Google Cloud Firestore.
+- **Component & Deployment Diagrams:**
+  <p align="center">
+    <img src="docs/diagrams/system_architecture.png" alt="System Architecture Diagram" width="700"/>
+  </p>
+
+## 📄 Sample Trip Output (Firestore Document)
+
+Each validated journey is stored under the path `users/{uid}/trips/{tripId}` with the following schema:
+
+```json
+{
+  "tripId": "TRIP_2026_0530_001",
+  "userId": "firebase_auth_uid_12345",
+  "date": "2026-05-30",
+  "startTime": "10:00 AM",
+  "endTime": "10:34 AM",
+  "durationSecs": 2040,
+  "distanceKm": 14.8,
+  "origin": "College",
+  "destination": "Home",
+  "travelMode": "Bus",
+  "purpose": "Education / Commute",
+  "companions": 1,
+  "cost": 30.0,
+  "status": "Auto-logged",
+  "routePoints": [
+    "8.5241,76.9366",
+    "8.5255,76.9380",
+    "8.5301,76.9421"
+  ]
+}
+
+
 
 
 
