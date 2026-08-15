@@ -181,7 +181,7 @@ Prompted Recall Notification        users/{uid}/trips
 ### Architecture & Data Flow Diagrams
 - **Sequence Diagram:**
   <p align="center">
-    <img src="docs/diagrams/sequence.jpg" alt="Sequence Diagram" width="700"/>
+    <img src="docs/diagrams/sequence_diagram.jpg" alt="Sequence Diagram" width="700"/>
   </p>
 
 ## 📄 Sample Trip Output (Firestore Document)
